@@ -1,0 +1,16 @@
+{
+  "name": "aceps",
+  "version-string": "0.1.0",
+  "description": "Original PS4 emulator research project",
+  "dependencies": [
+    "spdlog",
+    "vulkan",
+    "volk",
+    "qtbase",
+    "sdl2",
+    "zlib",
+    "zstd",
+    "openssl",
+    "xxhash"
+  ]
+}
