@@ -53,7 +53,17 @@ bool GpuQueue::wait(FenceValue fence) {
     future = found->second;
   }
   future.wait();
-  future.get();
+  try {
+    future.get();
+  } catch (...) {
+    std::scoped_lock lock(mutex_);
+    inFlight_.erase(fence);
+    throw;
+  }
+  {
+    std::scoped_lock lock(mutex_);
+    inFlight_.erase(fence);
+  }
   return true;
 }
 

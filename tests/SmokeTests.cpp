@@ -182,6 +182,7 @@ int main() {
   aceps::gpu::GpuQueue gpuQueue(1);
   const auto fence = gpuQueue.submit([] {});
   require(gpuQueue.wait(fence), "GPU fence must wait for submitted work");
+  require(gpuQueue.wait(fence), "completed GPU fence must remain idempotently waitable");
   require(gpuQueue.completedFence() >= fence, "GPU completion must advance the fence");
 
   aceps::common::ProfileCounter profile;
