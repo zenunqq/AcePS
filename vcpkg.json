@@ -1,0 +1,8 @@
+{
+  "name": "aceps",
+  "version-string": "0.1.0",
+  "description": "An original, experimental PlayStation 4 emulator architecture.",
+  "dependencies": [
+    "qtbase"
+  ]
+}
