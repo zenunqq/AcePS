@@ -22,6 +22,7 @@ struct ExportedSymbol final {
 class ModuleRegistry final {
 public:
   [[nodiscard]] bool registerModule(std::string moduleName, std::string& error);
+  [[nodiscard]] bool unregisterModule(std::string_view moduleName, std::string& error);
   [[nodiscard]] bool registerExport(std::string_view moduleName, std::string symbolName,
                                     GuestAddress address, std::string& error);
   [[nodiscard]] bool resolve(std::string_view moduleName, std::string_view symbolName,

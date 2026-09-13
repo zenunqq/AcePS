@@ -53,6 +53,9 @@ constexpr SyscallNumber kDeleteSema = 571;
 constexpr SyscallNumber kPrintf = 572;
 constexpr SyscallNumber kUsleep = 573;
 constexpr SyscallNumber kSleep = 574;
+constexpr SyscallNumber kDlsym = 591;
+constexpr SyscallNumber kLoadStartModule = 594;
+constexpr SyscallNumber kStopUnloadModule = 595;
 constexpr SyscallNumber kIsNeoMode = 615;
 constexpr std::size_t kMaxPrintfLength = 4096;
 
@@ -182,7 +185,7 @@ SyscallResult handlePrintf(const std::vector<std::uint64_t>& arguments) noexcept
 
 KernelSubsystem::KernelSubsystem(memory::VirtualMemoryManager& memory,
                                  filesystem::VirtualFileSystem& fileSystem) noexcept
-    : memory_(memory), fileSystem_(fileSystem) {}
+    : memory_(memory), fileSystem_(fileSystem), moduleLoader_(memory, fileSystem) {}
 
 KernelSubsystem::~KernelSubsystem() { shutdown(); }
 
@@ -193,7 +196,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     error.clear();
     return true;
   }
-  if (registry_.size() == 25) {
+  if (registry_.size() == 28) {
     initialized_ = true;
     error.clear();
     return true;
@@ -202,6 +205,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
   const auto registerHandler = [this, &error](SyscallNumber number, SyscallHandler handler) {
     return registry_.registerHandler(number, std::move(handler), error);
   };
+  if (!moduleLoader_.initializeStubs(error)) return false;
   if (!registerHandler(kExit, [](const auto& arguments) { return handleExit(arguments); }) ||
       !registerHandler(kMmap, [this](const auto& arguments) { return handleMmap(memory_, arguments); }) ||
       !registerHandler(kMunmap, [this](const auto& arguments) { return handleMunmap(memory_, arguments); }) ||
@@ -372,6 +376,30 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
         if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
         std::this_thread::sleep_for(std::chrono::seconds(arguments[0]));
         return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kLoadStartModule, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::string path;
+        if (!guestString(arguments[0], path)) return static_cast<SyscallResult>(-EFAULT);
+        std::string error;
+        const auto handle = moduleLoader_.loadModule(path, error);
+        return handle == 0 ? static_cast<SyscallResult>(-ENOENT)
+                           : static_cast<SyscallResult>(handle);
+      }) ||
+      !registerHandler(kStopUnloadModule, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::string error;
+        return moduleLoader_.unloadModule(arguments[0], error) ? static_cast<SyscallResult>(0)
+                                                               : static_cast<SyscallResult>(-EINVAL);
+      }) ||
+      !registerHandler(kDlsym, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 2)) return static_cast<SyscallResult>(-EINVAL);
+        std::string symbol;
+        if (!guestString(arguments[1], symbol)) return static_cast<SyscallResult>(-EFAULT);
+        std::string error;
+        const auto address = moduleLoader_.resolveSymbol(arguments[0], symbol, error);
+        return address == 0 ? static_cast<SyscallResult>(-ENOENT)
+                            : static_cast<SyscallResult>(address);
       })) {
     return false;
   }

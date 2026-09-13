@@ -8,6 +8,7 @@
 #include "aceps/core/Subsystem.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/memory/VirtualMemoryManager.h"
+#include "aceps/loader/ModuleLoader.h"
 #include "aceps/os/SyscallRegistry.h"
 
 #include <cstdint>
@@ -44,6 +45,7 @@ private:
 
   memory::VirtualMemoryManager& memory_;
   filesystem::VirtualFileSystem& fileSystem_;
+  loader::ModuleLoader moduleLoader_;
   SyscallRegistry registry_;
   std::unordered_map<std::uint64_t, ThreadEntry> threads_;
   std::unordered_map<std::uint64_t, std::shared_ptr<std::mutex>> mutexes_;

@@ -36,6 +36,7 @@ add_library(aceps_core STATIC
   src/os/SyscallPatcher.cpp
   src/os/SyscallRegistry.cpp
   src/loader/ElfMapper.cpp
+  src/loader/ModuleLoader.cpp
   src/loader/SelfLoader.cpp
   src/loader/ModuleRegistry.cpp
   src/filesystem/VirtualFileSystem.cpp

@@ -20,6 +20,16 @@ bool ModuleRegistry::registerModule(std::string moduleName, std::string& error) 
   return true;
 }
 
+bool ModuleRegistry::unregisterModule(std::string_view moduleName, std::string& error) {
+  const auto removed = modules_.erase(std::string(moduleName));
+  if (removed == 0) {
+    error = "module is not registered";
+    return false;
+  }
+  error.clear();
+  return true;
+}
+
 bool ModuleRegistry::registerExport(std::string_view moduleName, std::string symbolName,
                                     GuestAddress address, std::string& error) {
   const auto module = modules_.find(std::string(moduleName));
