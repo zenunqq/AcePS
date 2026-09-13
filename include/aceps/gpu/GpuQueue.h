@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 
 namespace aceps::gpu {
@@ -35,6 +36,7 @@ private:
   FenceValue nextFence_{1};
   FenceValue completedFence_{0};
   std::unordered_map<FenceValue, std::shared_future<void>> inFlight_;
+  std::set<FenceValue> completedOutOfOrder_;
 };
 
 } // namespace aceps::gpu

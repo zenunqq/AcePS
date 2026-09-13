@@ -75,6 +75,10 @@ std::future<FileReadResult> AsyncFileService::read(std::filesystem::path relativ
     if (cacheCapacity_ > 0) {
       std::scoped_lock lock(cacheMutex_);
       CacheKey key{keyPath, offset, size};
+      if (const auto existing = cacheIndex_.find(key); existing != cacheIndex_.end()) {
+        cacheLru_.erase(existing->second);
+        cacheIndex_.erase(existing);
+      }
       cacheLru_.push_front(CacheEntry{key, result.bytes});
       cacheIndex_[cacheLru_.front().key] = cacheLru_.begin();
       while (cacheLru_.size() > cacheCapacity_) {

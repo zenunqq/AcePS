@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <string>
@@ -186,6 +187,26 @@ int main() {
   require(gpuQueue.wait(fence), "GPU fence must wait for submitted work");
   require(gpuQueue.wait(fence), "completed GPU fence must remain idempotently waitable");
   require(gpuQueue.completedFence() >= fence, "GPU completion must advance the fence");
+
+  aceps::gpu::GpuQueue concurrentGpuQueue(2);
+  std::promise<void> firstStarted;
+  auto firstStartedFuture = firstStarted.get_future().share();
+  std::promise<void> releaseFirst;
+  auto releaseFirstFuture = releaseFirst.get_future().share();
+  const auto firstFence = concurrentGpuQueue.submit([&firstStarted, releaseFirstFuture] {
+    firstStarted.set_value();
+    releaseFirstFuture.wait();
+  });
+  firstStartedFuture.wait();
+  const auto secondFence = concurrentGpuQueue.submit([] {});
+  require(concurrentGpuQueue.wait(secondFence), "later GPU fence must be independently waitable");
+  require(concurrentGpuQueue.completedFence() < secondFence,
+          "out-of-order GPU completion must not skip earlier fences");
+  releaseFirst.set_value();
+  require(concurrentGpuQueue.wait(firstFence), "earlier GPU fence must complete after release");
+  require(concurrentGpuQueue.completedFence() == secondFence,
+          "ordered GPU completion must advance through contiguous fences");
+  concurrentGpuQueue.shutdown();
 
   aceps::common::ProfileCounter profile;
   { aceps::common::ProfileScope scope(profile); }

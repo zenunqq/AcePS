@@ -33,7 +33,11 @@ FenceValue GpuQueue::submit(std::function<void()> command) {
         promise->set_exception(std::current_exception());
       }
       std::scoped_lock completionLock(mutex_);
-      if (fence > completedFence_) completedFence_ = fence;
+      completedOutOfOrder_.insert(fence);
+      while (completedOutOfOrder_.contains(completedFence_ + 1U)) {
+        completedOutOfOrder_.erase(completedFence_ + 1U);
+        ++completedFence_;
+      }
     });
   } catch (...) {
     std::scoped_lock lock(mutex_);
@@ -47,10 +51,14 @@ bool GpuQueue::wait(FenceValue fence) {
   std::shared_future<void> future;
   {
     std::scoped_lock lock(mutex_);
-    if (fence <= completedFence_) return true;
     const auto found = inFlight_.find(fence);
-    if (found == inFlight_.end()) return false;
-    future = found->second;
+    if (found != inFlight_.end()) {
+      future = found->second;
+    } else if (fence <= completedFence_) {
+      return true;
+    } else {
+      return false;
+    }
   }
   future.wait();
   try {
