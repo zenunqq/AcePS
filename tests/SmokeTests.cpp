@@ -10,6 +10,10 @@
 #include "aceps/core/FrameClock.h"
 #include "aceps/core/WorkScheduler.h"
 #include "aceps/loader/SelfLoader.h"
+#include "aceps/loader/ModuleRegistry.h"
+#include "aceps/filesystem/AsyncFileService.h"
+#include "aceps/gpu/GpuQueue.h"
+#include "aceps/common/Profiler.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/gpu/Pm4Parser.h"
 #include "aceps/memory/VirtualMemoryManager.h"
@@ -156,6 +160,33 @@ int main() {
   const std::array<std::uint8_t, 4> malformedImage{0x7FU, 0x45U, 0x4CU, 0x46U};
   require(!aceps::loader::Elf64Loader::inspect(malformedImage, malformedPlan, error),
           "truncated ELF must be rejected");
+
+  aceps::loader::ModuleRegistry modules;
+  require(modules.registerModule("libkernel.sprx", error), "module registration must succeed");
+  require(modules.registerExport("libkernel.sprx", "sceKernelGettimeofday", 0x1000, error),
+          "module export registration must succeed");
+  aceps::loader::GuestAddress symbolAddress = 0;
+  require(modules.resolve("libkernel.sprx", "sceKernelGettimeofday", symbolAddress, error) &&
+              symbolAddress == 0x1000,
+          "module export must resolve to its guest address");
+
+  const auto asset = temporaryRoot / "asset.bin";
+  { std::ofstream output(asset, std::ios::binary); output << "AcePS asset"; }
+  aceps::filesystem::AsyncFileService fileService(temporaryRoot, 1);
+  auto readFuture = fileService.read("asset.bin", 0, 11);
+  const auto readResult = readFuture.get();
+  require(readResult.succeeded() && readResult.bytes.size() == 11, "async file read must complete");
+  require(!fileService.read("../escape", 0, 1).get().succeeded(), "async path traversal must fail");
+  fileService.shutdown();
+
+  aceps::gpu::GpuQueue gpuQueue(1);
+  const auto fence = gpuQueue.submit([] {});
+  require(gpuQueue.wait(fence), "GPU fence must wait for submitted work");
+  require(gpuQueue.completedFence() >= fence, "GPU completion must advance the fence");
+
+  aceps::common::ProfileCounter profile;
+  { aceps::common::ProfileScope scope(profile); }
+  require(profile.snapshot().events == 1, "profile scope must record one event");
   std::filesystem::remove_all(temporaryRoot);
   return 0;
 }

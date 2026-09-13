@@ -8,6 +8,8 @@ The current foundation includes a typed application configuration model with val
 
 For demanding workloads, the core also includes a bounded multi-worker scheduler with backpressure and exception-isolated futures, drift-resistant monotonic frame pacing, and zero-copy PM4 packet views. These foundations improve scalability but do not by themselves provide compatibility with a specific commercial game.
 
+The compatibility layer now also includes validated ELF load planning, a duplicate-safe module/export registry, bounded asynchronous file reads rooted to the virtual filesystem, GPU submission/fence primitives, and low-overhead atomic profiling counters. These components are designed to support streamed open-world workloads while keeping unsafe input and blocking I/O away from emulation hot paths.
+
 The emulation subsystems themselves are still intentionally non-functional seams. The project does **not** currently load or run commercial PS4 software. That separation is deliberate: lifecycle, error handling, configuration, and build quality are stabilized before hardware behavior is introduced.
 
 ## Build and test

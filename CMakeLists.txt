@@ -24,6 +24,7 @@ endif()
 add_library(aceps_core STATIC
   src/app/GameLibrary.cpp
   src/common/Logging.cpp
+  src/common/Profiler.cpp
   src/config/ApplicationConfig.cpp
   src/config/PlatformPaths.cpp
   src/core/Emulator.cpp
@@ -33,9 +34,12 @@ add_library(aceps_core STATIC
   src/os/Kernel.cpp
   src/os/SyscallRegistry.cpp
   src/loader/SelfLoader.cpp
+  src/loader/ModuleRegistry.cpp
   src/filesystem/VirtualFileSystem.cpp
+  src/filesystem/AsyncFileService.cpp
   src/gpu/CommandProcessor.cpp
   src/gpu/Pm4Parser.cpp
+  src/gpu/GpuQueue.cpp
   src/shader/ShaderTranslator.cpp
   src/audio/AudioSystem.cpp
   src/input/InputSystem.cpp
