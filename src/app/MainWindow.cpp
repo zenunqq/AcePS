@@ -5,7 +5,12 @@
  */
 #include "aceps/app/MainWindow.h"
 
+#include "aceps/core/BootSequence.h"
+
 #include <QAction>
+#include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -16,6 +21,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSizePolicy>
 #include <QStatusBar>
@@ -163,6 +169,11 @@ void MainWindow::createLibraryView() {
   heroSubtitle_->setWordWrap(true);
   heroSubtitle_->setStyleSheet(QStringLiteral("QLabel { background: transparent; border: 0; font-size: 14px; color: #94a9bf; }"));
   heroCopy->addWidget(heroSubtitle_);
+  bootButton_ = new QPushButton(tr("Boot"), hero);
+  bootButton_->setEnabled(false);
+  bootButton_->setStyleSheet(QStringLiteral("QPushButton { background: #2b9ee8; border: 0; border-radius: 6px; padding: 9px 18px; color: #ffffff; font-weight: 700; } QPushButton:hover { background: #42b2f4; } QPushButton:disabled { background: #29435b; color: #7890a6; }"));
+  connect(bootButton_, &QPushButton::clicked, this, &MainWindow::bootSelectedGame);
+  heroCopy->addWidget(bootButton_, 0, Qt::AlignLeft);
   heroCopy->addStretch();
   heroLayout->addLayout(heroCopy, 1);
   layout->addWidget(hero);
@@ -212,6 +223,7 @@ void MainWindow::refreshLibrary() {
   emptyState_->setVisible(empty);
   gameList_->setVisible(!empty);
   if (empty) {
+    bootButton_->setEnabled(false);
     heroTitle_->setText(tr("Games"));
     heroSubtitle_->setText(tr("Add a game folder or build to begin."));
     statusLabel_->setText(tr("No games added yet"));
@@ -228,6 +240,7 @@ void MainWindow::selectGame(int row) {
 
 void MainWindow::updateHero(const GameEntry* game) {
   if (game == nullptr) return;
+  bootButton_->setEnabled(true);
   heroTitle_->setText(QString::fromStdString(game->displayName));
   heroSubtitle_->setText(tr("Ready to launch — %1").arg(QString::fromStdString(game->titleId)));
   const auto iconPath = game->root / "sce_sys" / "icon0.png";
@@ -240,6 +253,62 @@ void MainWindow::updateHero(const GameEntry* game) {
 void MainWindow::importGame() {
   const auto path = QFileDialog::getExistingDirectory(this, tr("Choose a PS4 game folder or build"));
   if (!path.isEmpty()) addImportedGame(std::filesystem::path(path.toStdString()));
+}
+
+void MainWindow::bootSelectedGame() {
+  const auto row = gameList_->currentRow();
+  if (row < 0 || row >= static_cast<int>(library_.entries().size())) {
+    QMessageBox::information(this, tr("No game selected"), tr("Select a game before pressing Boot."));
+    return;
+  }
+
+  const auto& game = library_.entries()[static_cast<std::size_t>(row)];
+  auto elfPath = game.root / "eboot.bin";
+  if (!std::filesystem::is_regular_file(elfPath)) {
+    const auto app0Path = game.root / "app0" / "eboot.bin";
+    if (std::filesystem::is_regular_file(app0Path)) elfPath = app0Path;
+  }
+
+  QDialog logDialog(this);
+  logDialog.setWindowTitle(tr("Boot log — %1").arg(QString::fromStdString(game.displayName)));
+  logDialog.resize(720, 440);
+  auto* dialogLayout = new QVBoxLayout(&logDialog);
+  auto* logView = new QPlainTextEdit(&logDialog);
+  logView->setReadOnly(true);
+  logView->setStyleSheet(QStringLiteral("QPlainTextEdit { background: #080d15; color: #b9d3e8; border: 1px solid #26384e; font-family: monospace; }"));
+  dialogLayout->addWidget(logView, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &logDialog);
+  connect(buttons, &QDialogButtonBox::rejected, &logDialog, &QDialog::reject);
+  dialogLayout->addWidget(buttons);
+  const auto appendLog = [logView](const QString& message) {
+    logView->appendPlainText(message);
+    QApplication::processEvents();
+  };
+
+  appendLog(tr("Selected game: %1").arg(QString::fromStdString(game.displayName)));
+  appendLog(tr("ELF path: %1").arg(QString::fromStdString(elfPath.string())));
+  if (!std::filesystem::is_regular_file(elfPath)) {
+    appendLog(tr("ERROR: eboot.bin was not found in the selected game folder."));
+    statusLabel_->setText(tr("Boot failed: eboot.bin not found"));
+    logDialog.exec();
+    return;
+  }
+
+  bootButton_->setEnabled(false);
+  statusLabel_->setText(tr("Booting %1...").arg(QString::fromStdString(game.displayName)));
+  appendLog(tr("Starting BootSequence..."));
+  core::BootSequence bootSequence;
+  std::string error;
+  const bool succeeded = bootSequence.run(elfPath, error);
+  if (succeeded) {
+    appendLog(tr("BootSequence completed successfully."));
+    statusLabel_->setText(tr("Boot completed: %1").arg(QString::fromStdString(game.displayName)));
+  } else {
+    appendLog(tr("BootSequence failed: %1").arg(QString::fromStdString(error)));
+    statusLabel_->setText(tr("Boot failed: %1").arg(QString::fromStdString(error)));
+  }
+  bootButton_->setEnabled(true);
+  logDialog.exec();
 }
 
 void MainWindow::addImportedGame(const std::filesystem::path& path) {

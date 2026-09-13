@@ -33,7 +33,9 @@ add_library(aceps_core STATIC
   src/core/WorkScheduler.cpp
   src/memory/VirtualMemoryManager.cpp
   src/os/Kernel.cpp
+  src/os/SyscallPatcher.cpp
   src/os/SyscallRegistry.cpp
+  src/loader/ElfMapper.cpp
   src/loader/SelfLoader.cpp
   src/loader/ModuleRegistry.cpp
   src/filesystem/VirtualFileSystem.cpp

@@ -13,6 +13,7 @@
 class QLabel;
 class QListWidget;
 class QLineEdit;
+class QPushButton;
 class QToolButton;
 
 namespace aceps::app {
@@ -31,6 +32,7 @@ private:
   void selectGame(int row);
   void showSettings();
   void showAboutDialog();
+  void bootSelectedGame();
   void updateHero(const GameEntry* game);
   void addImportedGame(const std::filesystem::path& path);
 
@@ -42,6 +44,7 @@ private:
   QLabel* heroSubtitle_{nullptr};
   QLabel* emptyState_{nullptr};
   QLabel* statusLabel_{nullptr};
+  QPushButton* bootButton_{nullptr};
   QToolButton* importButton_{nullptr};
 };
 
