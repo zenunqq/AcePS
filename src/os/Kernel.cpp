@@ -1,6 +1,6 @@
 /*
- * Kernel.cpp implements the first file, memory, process, and diagnostic HLE
- * calls needed by a small legal ELF test workload to survive startup.
+ * Kernel.cpp implements the initial file, memory, process, thread, and
+ * synchronization HLE calls needed by a small legal ELF test workload.
  */
 #include "aceps/os/Kernel.h"
 
@@ -13,13 +13,16 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
 #else
 #include <fcntl.h>
+#include <pthread.h>
 #include <unistd.h>
 #endif
 
@@ -34,9 +37,26 @@ constexpr SyscallNumber kClose = 6;
 constexpr SyscallNumber kGetPid = 20;
 constexpr SyscallNumber kMmap = 477;
 constexpr SyscallNumber kMunmap = 478;
+constexpr SyscallNumber kCreateThread = 557;
+constexpr SyscallNumber kStartThread = 558;
+constexpr SyscallNumber kExitThread = 559;
+constexpr SyscallNumber kDeleteThread = 560;
+constexpr SyscallNumber kGetThreadId = 561;
+constexpr SyscallNumber kCreateMutex = 564;
+constexpr SyscallNumber kLockMutex = 565;
+constexpr SyscallNumber kUnlockMutex = 566;
+constexpr SyscallNumber kDeleteMutex = 567;
+constexpr SyscallNumber kCreateSema = 568;
+constexpr SyscallNumber kWaitSema = 569;
+constexpr SyscallNumber kSignalSema = 570;
+constexpr SyscallNumber kDeleteSema = 571;
 constexpr SyscallNumber kPrintf = 572;
+constexpr SyscallNumber kUsleep = 573;
+constexpr SyscallNumber kSleep = 574;
 constexpr SyscallNumber kIsNeoMode = 615;
 constexpr std::size_t kMaxPrintfLength = 4096;
+
+thread_local std::uint64_t currentGuestThreadId = 1;
 
 SyscallResult errorResult() noexcept { return -static_cast<SyscallResult>(errno == 0 ? EIO : errno); }
 
@@ -51,6 +71,18 @@ bool toSize(std::uint64_t value, std::size_t& result) noexcept {
 }
 
 bool toFileDescriptor(std::uint64_t value, int& result) noexcept {
+  if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) return false;
+  result = static_cast<int>(value);
+  return true;
+}
+
+bool toCount(std::uint64_t value, int& result) noexcept {
+  if (value == 0 || value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) return false;
+  result = static_cast<int>(value);
+  return true;
+}
+
+bool toInitialCount(std::uint64_t value, int& result) noexcept {
   if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) return false;
   result = static_cast<int>(value);
   return true;
@@ -152,6 +184,8 @@ KernelSubsystem::KernelSubsystem(memory::VirtualMemoryManager& memory,
                                  filesystem::VirtualFileSystem& fileSystem) noexcept
     : memory_(memory), fileSystem_(fileSystem) {}
 
+KernelSubsystem::~KernelSubsystem() { shutdown(); }
+
 std::string_view KernelSubsystem::name() const noexcept { return "kernel"; }
 
 bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error) {
@@ -159,7 +193,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     error.clear();
     return true;
   }
-  if (registry_.size() == 10) {
+  if (registry_.size() == 25) {
     initialized_ = true;
     error.clear();
     return true;
@@ -186,7 +220,159 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
       !registerHandler(kWrite, [](const auto& arguments) { return handleWrite(arguments); }) ||
       !registerHandler(kGetPid, [](const auto&) { return static_cast<SyscallResult>(1); }) ||
       !registerHandler(kPrintf, [](const auto& arguments) { return handlePrintf(arguments); }) ||
-      !registerHandler(kIsNeoMode, [](const auto&) { return static_cast<SyscallResult>(0); })) {
+      !registerHandler(kIsNeoMode, [](const auto&) { return static_cast<SyscallResult>(0); }) ||
+      !registerHandler(kCreateThread, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 2) || arguments[1] == 0) return static_cast<SyscallResult>(-EINVAL);
+        std::scoped_lock lock(threadTableMutex_);
+        const auto id = nextThreadId_++;
+        threads_.emplace(id, ThreadEntry{std::thread{}, arguments[1],
+                                          argumentAvailable(arguments, 3) ? arguments[2] : 0, false});
+        return static_cast<SyscallResult>(id);
+      }) ||
+      !registerHandler(kStartThread, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::scoped_lock lock(threadTableMutex_);
+        const auto found = threads_.find(arguments[0]);
+        if (found == threads_.end()) return static_cast<SyscallResult>(-ESRCH);
+        if (found->second.started) return static_cast<SyscallResult>(-EALREADY);
+        auto& entry = found->second;
+        const auto id = found->first;
+        entry.started = true;
+        try {
+          entry.worker = std::thread([this, id, entryPoint = entry.entryPoint, argument = entry.argument] {
+            currentGuestThreadId = id;
+            using ThreadEntryPoint = void (*)(std::uint64_t);
+            auto function = reinterpret_cast<ThreadEntryPoint>(static_cast<std::uintptr_t>(entryPoint));
+            if (function != nullptr) function(argument);
+            currentGuestThreadId = 1;
+          });
+        } catch (...) {
+          entry.started = false;
+          return static_cast<SyscallResult>(-EAGAIN);
+        }
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kExitThread, [](const auto&) {
+#if defined(_WIN32)
+        ::ExitThread(0);
+#else
+        ::pthread_exit(nullptr);
+#endif
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kDeleteThread, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::thread worker;
+        {
+          std::scoped_lock lock(threadTableMutex_);
+          const auto found = threads_.find(arguments[0]);
+          if (found == threads_.end()) return static_cast<SyscallResult>(-ESRCH);
+          if (found->first == currentGuestThreadId) return static_cast<SyscallResult>(-EDEADLK);
+          worker = std::move(found->second.worker);
+          threads_.erase(found);
+        }
+        if (worker.joinable()) worker.join();
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kGetThreadId, [](const auto&) { return static_cast<SyscallResult>(currentGuestThreadId); }) ||
+      !registerHandler(kCreateMutex, [this](const auto&) {
+        std::scoped_lock lock(mutexTableMutex_);
+        const auto handle = nextMutexHandle_++;
+        mutexes_.emplace(handle, std::make_shared<std::mutex>());
+        return static_cast<SyscallResult>(handle);
+      }) ||
+      !registerHandler(kLockMutex, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::shared_ptr<std::mutex> mutex;
+        {
+          std::scoped_lock lock(mutexTableMutex_);
+          const auto found = mutexes_.find(arguments[0]);
+          if (found == mutexes_.end()) return static_cast<SyscallResult>(-EINVAL);
+          mutex = found->second;
+        }
+        mutex->lock();
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kUnlockMutex, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::shared_ptr<std::mutex> mutex;
+        {
+          std::scoped_lock lock(mutexTableMutex_);
+          const auto found = mutexes_.find(arguments[0]);
+          if (found == mutexes_.end()) return static_cast<SyscallResult>(-EINVAL);
+          mutex = found->second;
+        }
+        mutex->unlock();
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kDeleteMutex, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::scoped_lock lock(mutexTableMutex_);
+        const auto found = mutexes_.find(arguments[0]);
+        if (found == mutexes_.end()) return static_cast<SyscallResult>(-EINVAL);
+        if (!found->second->try_lock()) return static_cast<SyscallResult>(-EBUSY);
+        found->second->unlock();
+        mutexes_.erase(found);
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kCreateSema, [this](const auto& arguments) {
+        int count = 1;
+        if (argumentAvailable(arguments, 1) && !toInitialCount(arguments[0], count)) return static_cast<SyscallResult>(-EINVAL);
+        std::scoped_lock lock(semaphoreTableMutex_);
+        const auto handle = nextSemaphoreHandle_++;
+        semaphores_.emplace(handle, std::make_shared<Semaphore>(count));
+        return static_cast<SyscallResult>(handle);
+      }) ||
+      !registerHandler(kWaitSema, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        int count = 1;
+        if (argumentAvailable(arguments, 2) && !toCount(arguments[1], count)) return static_cast<SyscallResult>(-EINVAL);
+        std::shared_ptr<Semaphore> semaphore;
+        {
+          std::scoped_lock lock(semaphoreTableMutex_);
+          const auto found = semaphores_.find(arguments[0]);
+          if (found == semaphores_.end()) return static_cast<SyscallResult>(-EINVAL);
+          semaphore = found->second;
+        }
+        for (int index = 0; index < count; ++index) semaphore->acquire();
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kSignalSema, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        int count = 1;
+        if (argumentAvailable(arguments, 2) && !toCount(arguments[1], count)) return static_cast<SyscallResult>(-EINVAL);
+        std::shared_ptr<Semaphore> semaphore;
+        {
+          std::scoped_lock lock(semaphoreTableMutex_);
+          const auto found = semaphores_.find(arguments[0]);
+          if (found == semaphores_.end()) return static_cast<SyscallResult>(-EINVAL);
+          semaphore = found->second;
+        }
+        try {
+          semaphore->release(count);
+        } catch (...) {
+          return static_cast<SyscallResult>(-EOVERFLOW);
+        }
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kDeleteSema, [this](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::scoped_lock lock(semaphoreTableMutex_);
+        const auto found = semaphores_.find(arguments[0]);
+        if (found == semaphores_.end()) return static_cast<SyscallResult>(-EINVAL);
+        semaphores_.erase(found);
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kUsleep, [](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::this_thread::sleep_for(std::chrono::microseconds(arguments[0]));
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kSleep, [](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::this_thread::sleep_for(std::chrono::seconds(arguments[0]));
+        return static_cast<SyscallResult>(0);
+      })) {
     return false;
   }
 
@@ -195,7 +381,34 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
   return true;
 }
 
-void KernelSubsystem::shutdown() noexcept { initialized_ = false; }
+void KernelSubsystem::shutdown() noexcept {
+  std::vector<std::thread> workers;
+  {
+    std::scoped_lock lock(threadTableMutex_);
+    for (auto& [id, entry] : threads_) {
+      (void)id;
+      if (entry.worker.joinable()) workers.push_back(std::move(entry.worker));
+    }
+    threads_.clear();
+  }
+  for (auto& worker : workers) {
+    if (!worker.joinable()) continue;
+    if (worker.get_id() == std::this_thread::get_id()) {
+      worker.detach();
+    } else {
+      worker.join();
+    }
+  }
+  {
+    std::scoped_lock lock(mutexTableMutex_);
+    mutexes_.clear();
+  }
+  {
+    std::scoped_lock lock(semaphoreTableMutex_);
+    semaphores_.clear();
+  }
+  initialized_ = false;
+}
 
 SyscallRegistry& KernelSubsystem::registry() noexcept { return registry_; }
 
