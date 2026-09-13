@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
   }
 
   aceps::app::MainWindow window;
-  window.show();
+  window.showMaximized();
   const int result = application.exec();
   emulator.shutdown();
   aceps::logging::shutdown();

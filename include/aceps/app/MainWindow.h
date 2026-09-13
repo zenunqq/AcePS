@@ -1,6 +1,6 @@
 /*
- * MainWindow.h declares AcePS's first-run desktop shell: library view,
- * menu bar, toolbar, and status bar. Emulation services remain UI-agnostic.
+ * MainWindow.h declares the AcePS Games home screen: console-style navigation,
+ * hero selection, game cards, search, settings, and a top-right import action.
  */
 #pragma once
 
@@ -8,8 +8,12 @@
 
 #include <QMainWindow>
 
-class QListWidget;
+#include <filesystem>
+
 class QLabel;
+class QListWidget;
+class QLineEdit;
+class QToolButton;
 
 namespace aceps::app {
 
@@ -20,16 +24,24 @@ public:
   explicit MainWindow(QWidget* parent = nullptr);
 
 private:
-  void createMenus();
-  void createToolbar();
+  void createHeader();
   void createLibraryView();
   void refreshLibrary();
+  void importGame();
+  void selectGame(int row);
+  void showSettings();
   void showAboutDialog();
-  void showAddGameDialog();
+  void updateHero(const GameEntry* game);
+  void addImportedGame(const std::filesystem::path& path);
 
   GameLibrary library_;
   QListWidget* gameList_{nullptr};
+  QLineEdit* searchBox_{nullptr};
+  QLabel* heroArtwork_{nullptr};
+  QLabel* heroTitle_{nullptr};
+  QLabel* heroSubtitle_{nullptr};
   QLabel* statusLabel_{nullptr};
+  QToolButton* importButton_{nullptr};
 };
 
 } // namespace aceps::app
