@@ -251,8 +251,14 @@ void MainWindow::updateHero(const GameEntry* game) {
 }
 
 void MainWindow::importGame() {
-  const auto path = QFileDialog::getExistingDirectory(this, tr("Choose a PS4 game folder or build"));
-  if (!path.isEmpty()) addImportedGame(std::filesystem::path(path.toStdString()));
+  const auto pkgPath = QFileDialog::getOpenFileName(this, tr("Choose a PS4 PKG or game folder"), {},
+                                                    tr("PS4 packages (*.pkg);;All files (*)"));
+  if (!pkgPath.isEmpty()) {
+    addImportedGame(std::filesystem::path(pkgPath.toStdString()));
+    return;
+  }
+  const auto folderPath = QFileDialog::getExistingDirectory(this, tr("Choose a PS4 game folder or build"));
+  if (!folderPath.isEmpty()) addImportedGame(std::filesystem::path(folderPath.toStdString()));
 }
 
 void MainWindow::bootSelectedGame() {

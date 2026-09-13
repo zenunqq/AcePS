@@ -5,6 +5,7 @@
 #include "aceps/os/Kernel.h"
 
 #include "aceps/common/Logging.h"
+#include "aceps/loader/PkgLoader.h"
 
 #include <cerrno>
 #include <cstddef>
@@ -56,6 +57,7 @@ constexpr SyscallNumber kSleep = 574;
 constexpr SyscallNumber kDlsym = 591;
 constexpr SyscallNumber kLoadStartModule = 594;
 constexpr SyscallNumber kStopUnloadModule = 595;
+constexpr SyscallNumber kInstallHandler = 596;
 constexpr SyscallNumber kIsNeoMode = 615;
 constexpr std::size_t kMaxPrintfLength = 4096;
 
@@ -196,7 +198,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     error.clear();
     return true;
   }
-  if (registry_.size() == 28) {
+  if (registry_.size() == 29) {
     initialized_ = true;
     error.clear();
     return true;
@@ -400,6 +402,20 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
         const auto address = moduleLoader_.resolveSymbol(arguments[0], symbol, error);
         return address == 0 ? static_cast<SyscallResult>(-ENOENT)
                             : static_cast<SyscallResult>(address);
+      }) ||
+      !registerHandler(kInstallHandler, [](const auto& arguments) {
+        if (!argumentAvailable(arguments, 1)) return static_cast<SyscallResult>(-EINVAL);
+        std::string path;
+        if (!guestString(arguments[0], path)) return static_cast<SyscallResult>(-EFAULT);
+        loader::PkgLoader package;
+        std::string error;
+        if (!package.parse(path, error)) {
+          aceps::logging::error(error);
+          return static_cast<SyscallResult>(-EINVAL);
+        }
+        aceps::logging::info("PKG content ID: " + package.contentId());
+        if (!package.info().title.empty()) aceps::logging::info("PKG title: " + package.info().title);
+        return static_cast<SyscallResult>(0);
       })) {
     return false;
   }

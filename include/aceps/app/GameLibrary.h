@@ -13,8 +13,10 @@ namespace aceps::app {
 
 struct GameEntry final {
   std::filesystem::path root;
+  std::filesystem::path sourcePath;
   std::string displayName;
   std::string titleId;
+  std::string version;
 };
 
 class GameLibrary final {
