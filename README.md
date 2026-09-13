@@ -4,7 +4,7 @@ AcePS is an original C++20 PS4 emulator research project. The repository now pro
 
 ## What is implemented now
 
-The current foundation includes a typed application configuration model with validation, a top-level emulator service container, explicit subsystem lifecycle contracts, transactional startup with reverse-order rollback, typed initialization errors, a thread-safe logging adapter, a Qt6 desktop shell, deterministic game discovery, a traversal-safe virtual filesystem, a host-backed page-granular virtual memory manager, a duplicate-safe syscall registry, a bounds-checked PM4 packet parser, CMake install/export metadata, vcpkg manifest setup, and strict core smoke tests.
+The current foundation includes a typed application configuration model with validation, a top-level emulator service container, explicit subsystem lifecycle contracts, transactional startup with reverse-order rollback, typed initialization errors, a thread-safe logging adapter, a Qt6 desktop shell, deterministic game discovery, a traversal-safe virtual filesystem, a validated ELF64 load-plan parser, a host-backed page-granular virtual memory manager, a duplicate-safe syscall registry, a bounds-checked PM4 packet parser, CMake install/export metadata, vcpkg manifest setup, and strict core smoke tests.
 
 For demanding workloads, the core also includes a bounded multi-worker scheduler with backpressure and exception-isolated futures, drift-resistant monotonic frame pacing, and zero-copy PM4 packet views. These foundations improve scalability but do not by themselves provide compatibility with a specific commercial game.
 

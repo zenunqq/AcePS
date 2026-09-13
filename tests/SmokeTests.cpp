@@ -9,15 +9,19 @@
 #include "aceps/core/EmulatorError.h"
 #include "aceps/core/FrameClock.h"
 #include "aceps/core/WorkScheduler.h"
+#include "aceps/loader/SelfLoader.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/gpu/Pm4Parser.h"
 #include "aceps/memory/VirtualMemoryManager.h"
 #include "aceps/os/SyscallRegistry.h"
 
 #include <cstdlib>
+#include <array>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -139,6 +143,19 @@ int main() {
   clock.waitForNextFrame();
   require(clock.frameCount() == 1, "frame clock must count completed frames");
   require(clock.lastDelta().count() > 0, "frame clock must report a positive delta");
+
+  std::ifstream hostBinary("/bin/sh", std::ios::binary);
+  std::vector<std::uint8_t> elfImage((std::istreambuf_iterator<char>(hostBinary)), {});
+  if (!elfImage.empty()) {
+    aceps::loader::ElfLoadPlan loadPlan;
+    require(aceps::loader::Elf64Loader::inspect(elfImage, loadPlan, error),
+            "valid host ELF64 binary must produce a load plan");
+    require(!loadPlan.segments.empty(), "ELF load plan must contain segments");
+  }
+  aceps::loader::ElfLoadPlan malformedPlan;
+  const std::array<std::uint8_t, 4> malformedImage{0x7FU, 0x45U, 0x4CU, 0x46U};
+  require(!aceps::loader::Elf64Loader::inspect(malformedImage, malformedPlan, error),
+          "truncated ELF must be rejected");
   std::filesystem::remove_all(temporaryRoot);
   return 0;
 }
