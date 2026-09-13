@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <unordered_set>
 #include <utility>
 
 namespace aceps::loader {
@@ -57,6 +58,102 @@ std::int64_t stubMemset(const std::vector<std::uint64_t>& arguments) {
 
 GuestAddress functionAddress(std::int64_t (*function)(const std::vector<std::uint64_t>&)) {
   return reinterpret_cast<GuestAddress>(function);
+}
+
+template <typename Integer>
+bool readInteger(const std::vector<std::uint8_t>& image, std::size_t offset, Integer& value) noexcept {
+  if (offset > image.size() || sizeof(Integer) > image.size() - offset) return false;
+  std::memcpy(&value, image.data() + offset, sizeof(Integer));
+  return true;
+}
+
+bool checkedTable(const std::vector<std::uint8_t>& image, std::uint64_t offset,
+                 std::uint64_t size, std::size_t& hostOffset, std::size_t& hostSize) noexcept {
+  if (offset > image.size() || size > image.size() - static_cast<std::size_t>(offset)) return false;
+  hostOffset = static_cast<std::size_t>(offset);
+  hostSize = static_cast<std::size_t>(size);
+  return true;
+}
+
+bool registerElfExports(const std::vector<std::uint8_t>& image,
+                        std::string_view moduleName,
+                        ModuleRegistry& registry,
+                        std::string& error) {
+  std::uint64_t sectionOffset = 0;
+  std::uint16_t sectionEntrySize = 0;
+  std::uint16_t sectionCount = 0;
+  if (!readInteger(image, 40, sectionOffset) || !readInteger(image, 58, sectionEntrySize) ||
+      !readInteger(image, 60, sectionCount) || sectionEntrySize < 64) {
+    error = "ELF section table is invalid";
+    return false;
+  }
+  if (sectionCount == 0) return true;
+  if (sectionOffset > image.size() ||
+      sectionCount > (image.size() - static_cast<std::size_t>(sectionOffset)) / sectionEntrySize) {
+    error = "ELF section table exceeds the image";
+    return false;
+  }
+
+  std::unordered_set<std::string> registered;
+  for (std::uint16_t section = 0; section < sectionCount; ++section) {
+    const auto sectionBase = static_cast<std::size_t>(sectionOffset) +
+                             static_cast<std::size_t>(section) * sectionEntrySize;
+    std::uint32_t type = 0;
+    std::uint64_t symbolsOffset = 0;
+    std::uint64_t symbolsSize = 0;
+    std::uint32_t stringSection = 0;
+    std::uint64_t symbolEntrySize = 0;
+    if (!readInteger(image, sectionBase + 4, type) || (type != 2 && type != 11) ||
+        !readInteger(image, sectionBase + 24, symbolsOffset) ||
+        !readInteger(image, sectionBase + 32, symbolsSize) ||
+        !readInteger(image, sectionBase + 40, stringSection) ||
+        !readInteger(image, sectionBase + 56, symbolEntrySize) || symbolEntrySize < 24 ||
+        symbolsSize % symbolEntrySize != 0 || stringSection >= sectionCount) {
+      continue;
+    }
+    std::size_t symbolsHostOffset = 0;
+    std::size_t symbolsHostSize = 0;
+    if (!checkedTable(image, symbolsOffset, symbolsSize, symbolsHostOffset, symbolsHostSize)) {
+      error = "ELF symbol table exceeds the image";
+      return false;
+    }
+    const auto stringBase = static_cast<std::size_t>(sectionOffset) +
+                            static_cast<std::size_t>(stringSection) * sectionEntrySize;
+    std::uint64_t stringsOffset = 0;
+    std::uint64_t stringsSize = 0;
+    if (!readInteger(image, stringBase + 24, stringsOffset) ||
+        !readInteger(image, stringBase + 32, stringsSize)) {
+      error = "ELF string table is invalid";
+      return false;
+    }
+    std::size_t stringsHostOffset = 0;
+    std::size_t stringsHostSize = 0;
+    if (!checkedTable(image, stringsOffset, stringsSize, stringsHostOffset, stringsHostSize)) {
+      error = "ELF string table exceeds the image";
+      return false;
+    }
+    for (std::size_t symbolOffset = 0; symbolOffset < symbolsHostSize; symbolOffset += symbolEntrySize) {
+      std::uint32_t nameOffset = 0;
+      std::uint16_t sectionIndex = 0;
+      std::uint64_t value = 0;
+      if (!readInteger(image, symbolsHostOffset + symbolOffset, nameOffset) ||
+          !readInteger(image, symbolsHostOffset + symbolOffset + 6, sectionIndex) ||
+          !readInteger(image, symbolsHostOffset + symbolOffset + 8, value) ||
+          nameOffset >= stringsHostSize || value == 0 || sectionIndex == 0) {
+        continue;
+      }
+      const auto* name = reinterpret_cast<const char*>(image.data() + stringsHostOffset + nameOffset);
+      const auto remaining = stringsHostSize - nameOffset;
+      std::size_t length = 0;
+      while (length < remaining && name[length] != '\0') ++length;
+      if (length == remaining) continue;
+      std::string symbolName(name, length);
+      if (!registered.insert(symbolName).second) continue;
+      if (!registry.registerExport(moduleName, std::move(symbolName), value, error)) return false;
+    }
+  }
+  error.clear();
+  return true;
 }
 
 } // namespace
@@ -175,6 +272,11 @@ std::uint64_t ModuleLoader::loadModule(const std::filesystem::path& path, std::s
   auto mapper = std::make_unique<ElfMapper>();
   if (!mapper->map(image, plan, memory_, error)) return 0;
   if (!registry_.registerModule(moduleName, error)) return 0;
+  if (!registerElfExports(image, moduleName, registry_, error)) {
+    std::string ignored;
+    (void)registry_.unregisterModule(moduleName, ignored);
+    return 0;
+  }
 
   const auto handle = nextHandle_++;
   handleNames_.emplace(handle, moduleName);
