@@ -67,6 +67,7 @@ if(ACEPS_BUILD_GUI)
     add_executable(aceps
       src/main.cpp
       src/app/MainWindow.cpp
+      include/aceps/app/MainWindow.h
     )
     target_link_libraries(aceps PRIVATE AcePS::Core Qt6::Widgets)
     target_include_directories(aceps PRIVATE include)
