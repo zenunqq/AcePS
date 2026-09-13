@@ -33,13 +33,15 @@ MainWindow::MainWindow(QWidget* parent)
   resize(1440, 820);
   setStyleSheet(QStringLiteral(R"(
     QMainWindow, QWidget { background: #0b1220; color: #f3f7ff; }
-    QMenuBar { background: #101a2b; color: #aebbd0; padding: 7px 16px; border-bottom: 1px solid #233149; }
+    QLabel { background: transparent; }
+    QMenuBar { background: #0d1727; color: #aebbd0; padding: 7px 16px; border-bottom: 1px solid #233149; }
     QMenuBar::item:selected { background: #1c2a43; color: #ffffff; border-radius: 6px; }
-    QToolButton { border: 0; border-radius: 18px; padding: 9px 15px; color: #c7d5e8; }
+    QToolBar { background: #0d1727; border: 0; padding: 8px 24px; spacing: 10px; }
+    QToolButton { border: 0; border-radius: 8px; padding: 9px 15px; color: #c7d5e8; }
     QToolButton:hover { background: #1b2e4a; color: #ffffff; }
     QLineEdit { background: #142238; border: 1px solid #2b4160; border-radius: 18px; padding: 9px 16px; color: #ffffff; selection-background-color: #27a6ff; }
     QListWidget { background: transparent; border: 0; outline: 0; }
-    QListWidget::item { background: #111e33; border: 1px solid #1e3552; border-radius: 12px; margin: 8px; padding: 0; }
+    QListWidget::item { background: #111e33; border: 1px solid #1e3552; border-radius: 10px; margin: 8px; padding: 0; }
     QListWidget::item:selected { border: 2px solid #31b7ff; background: #162b47; }
     QStatusBar { background: #0a101b; color: #8496ad; border-top: 1px solid #1d2a3e; }
   )"));
@@ -94,20 +96,20 @@ void MainWindow::createHeader() {
 void MainWindow::createLibraryView() {
   auto* container = new QWidget(this);
   auto* layout = new QVBoxLayout(container);
-  layout->setContentsMargins(32, 22, 32, 16);
-  layout->setSpacing(18);
+  layout->setContentsMargins(44, 28, 44, 18);
+  layout->setSpacing(16);
 
   auto* nav = new QLabel(tr("GAMES"), container);
   nav->setStyleSheet(QStringLiteral("color: #53c4ff; font-size: 13px; font-weight: 800; letter-spacing: 2px;"));
   layout->addWidget(nav);
 
   auto* hero = new QWidget(container);
-  hero->setMinimumHeight(220);
-  hero->setStyleSheet(QStringLiteral("background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #142b4a, stop:0.55 #102039, stop:1 #0e1727); border: 1px solid #223d60; border-radius: 16px;"));
+  hero->setMinimumHeight(236);
+  hero->setStyleSheet(QStringLiteral("background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #142c4c, stop:0.55 #11233c, stop:1 #0e1727); border: 1px solid #284a70; border-radius: 14px;"));
   auto* heroLayout = new QHBoxLayout(hero);
   heroLayout->setContentsMargins(26, 22, 26, 22);
   heroArtwork_ = new QLabel(hero);
-  heroArtwork_->setFixedSize(170, 170);
+  heroArtwork_->setFixedSize(176, 176);
   heroArtwork_->setAlignment(Qt::AlignCenter);
   heroArtwork_->setStyleSheet(QStringLiteral("background: #0a1424; border-radius: 12px; color: #4d6b8d; font-size: 52px;"));
   heroArtwork_->setText(QStringLiteral("＋"));
@@ -115,10 +117,10 @@ void MainWindow::createLibraryView() {
   auto* heroText = new QVBoxLayout();
   heroText->addStretch();
   heroTitle_ = new QLabel(tr("Your games, ready to play"), hero);
-  heroTitle_->setStyleSheet(QStringLiteral("font-size: 28px; font-weight: 700; color: #ffffff;"));
+  heroTitle_->setStyleSheet(QStringLiteral("QLabel { background: transparent; border: 0; padding: 0; font-size: 30px; font-weight: 700; color: #ffffff; }"));
   heroText->addWidget(heroTitle_);
   heroSubtitle_ = new QLabel(tr("Import a PS4 game folder or build with the + Add game button."), hero);
-  heroSubtitle_->setStyleSheet(QStringLiteral("font-size: 15px; color: #9cb1c9;"));
+  heroSubtitle_->setStyleSheet(QStringLiteral("QLabel { background: transparent; border: 0; padding: 0; font-size: 15px; color: #a8bad0; }"));
   heroText->addWidget(heroSubtitle_);
   heroText->addStretch();
   heroLayout->addLayout(heroText);
@@ -126,8 +128,13 @@ void MainWindow::createLibraryView() {
   layout->addWidget(hero);
 
   auto* libraryTitle = new QLabel(tr("Game Library"), container);
-  libraryTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700; color: #ffffff;"));
+  libraryTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700; color: #ffffff; margin-top: 4px;"));
   layout->addWidget(libraryTitle);
+  emptyState_ = new QLabel(tr("No games in your library yet\n\nUse  +  Add game  to import a game folder or build."), container);
+  emptyState_->setAlignment(Qt::AlignCenter);
+  emptyState_->setMinimumHeight(150);
+  emptyState_->setStyleSheet(QStringLiteral("background: #0e1a2c; border: 1px dashed #2c4868; border-radius: 12px; color: #8ea4bd; font-size: 15px; line-height: 1.4;"));
+  layout->addWidget(emptyState_);
   gameList_ = new QListWidget(container);
   gameList_->setViewMode(QListView::IconMode);
   gameList_->setResizeMode(QListView::Adjust);
@@ -137,6 +144,7 @@ void MainWindow::createLibraryView() {
   gameList_->setGridSize(QSize(190, 210));
   connect(gameList_, &QListWidget::currentRowChanged, this, &MainWindow::selectGame);
   layout->addWidget(gameList_, 1);
+  emptyState_->show();
   setCentralWidget(container);
 }
 
@@ -155,10 +163,14 @@ void MainWindow::refreshLibrary() {
     item->setToolTip(QString::fromStdString(game.root.string()));
   }
   if (library_.entries().empty()) {
+    emptyState_->show();
+    gameList_->hide();
     heroTitle_->setText(tr("Your games, ready to play"));
     heroSubtitle_->setText(tr("Import a PS4 game folder or build with the + Add game button."));
     statusLabel_->setText(tr("No games added yet"));
   } else {
+    emptyState_->hide();
+    gameList_->show();
     selectGame(0);
   }
 }

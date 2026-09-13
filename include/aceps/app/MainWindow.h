@@ -40,6 +40,7 @@ private:
   QLabel* heroArtwork_{nullptr};
   QLabel* heroTitle_{nullptr};
   QLabel* heroSubtitle_{nullptr};
+  QLabel* emptyState_{nullptr};
   QLabel* statusLabel_{nullptr};
   QToolButton* importButton_{nullptr};
 };
