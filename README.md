@@ -74,11 +74,6 @@ Qt6, Vulkan, spdlog, SDL2, compression, cryptography, and hashing dependencies a
 
 ## Planned implementation order
 
-1. Memory manager and host protection abstraction
-2. SELF/ELF loader and module metadata
-3. Orbis syscall registry and synchronization primitives
-4. VFS, PKG, and PFS read-only support
-5. CPU syscall/exception patching
-6. PM4 command processor and Vulkan device layer
-7. Shader translator and pipeline cache
-8. Audio and input backends
+The detailed staged plan is maintained in [`docs/roadmap.md`](docs/roadmap.md). At a high level, implementation proceeds from segment mapping and legal test workloads, through read-only package access and core OS services, into the guest syscall boundary, GPU submission, shader translation, render correctness, and finally audio, input, persistence, and broader compatibility coverage.
+
+Each milestone requires deterministic fixtures, malformed-input tests, bounded resource ownership, and an updated architecture note. The roadmap explicitly excludes proprietary firmware keys and decrypted commercial game content.
