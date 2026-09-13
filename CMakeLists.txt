@@ -27,6 +27,7 @@ add_library(aceps_core STATIC
   src/common/Profiler.cpp
   src/config/ApplicationConfig.cpp
   src/config/PlatformPaths.cpp
+  src/core/BootSequence.cpp
   src/core/Emulator.cpp
   src/core/FrameClock.cpp
   src/core/WorkScheduler.cpp
