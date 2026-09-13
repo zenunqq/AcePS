@@ -7,6 +7,8 @@
 #include "aceps/app/GameLibrary.h"
 #include "aceps/core/Emulator.h"
 #include "aceps/core/EmulatorError.h"
+#include "aceps/core/FrameClock.h"
+#include "aceps/core/WorkScheduler.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/gpu/Pm4Parser.h"
 #include "aceps/memory/VirtualMemoryManager.h"
@@ -116,6 +118,27 @@ int main() {
     threw = true;
   }
   require(threw, "invalid configuration must throw a typed emulator error");
+
+  aceps::core::WorkScheduler scheduler(2, 8);
+  auto first = scheduler.submit([] { return 20U + 22U; });
+  auto second = scheduler.submit([] { return std::string("scheduled"); });
+  require(first.get() == 42U, "scheduled numeric work must complete");
+  require(second.get() == "scheduled", "scheduled string work must complete");
+  require(scheduler.workerCount() == 2, "scheduler worker count must be configured");
+  scheduler.shutdown();
+
+  bool submitAfterShutdownThrew = false;
+  try {
+    (void)scheduler.submit([] {});
+  } catch (const std::runtime_error&) {
+    submitAfterShutdownThrew = true;
+  }
+  require(submitAfterShutdownThrew, "scheduler must reject work after shutdown");
+
+  aceps::core::FrameClock clock(1000.0);
+  clock.waitForNextFrame();
+  require(clock.frameCount() == 1, "frame clock must count completed frames");
+  require(clock.lastDelta().count() > 0, "frame clock must report a positive delta");
   std::filesystem::remove_all(temporaryRoot);
   return 0;
 }

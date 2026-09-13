@@ -27,6 +27,8 @@ add_library(aceps_core STATIC
   src/config/ApplicationConfig.cpp
   src/config/PlatformPaths.cpp
   src/core/Emulator.cpp
+  src/core/FrameClock.cpp
+  src/core/WorkScheduler.cpp
   src/memory/VirtualMemoryManager.cpp
   src/os/Kernel.cpp
   src/os/SyscallRegistry.cpp
