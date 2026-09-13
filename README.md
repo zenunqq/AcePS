@@ -4,7 +4,7 @@ AcePS is an original C++20 PS4 emulator research project. The repository now pro
 
 ## What is implemented now
 
-The current foundation includes a typed application configuration model with validation, a top-level emulator service container, explicit subsystem lifecycle contracts, transactional startup with reverse-order rollback, typed initialization errors, a thread-safe logging adapter, a Qt6 desktop shell, CMake install/export metadata, vcpkg manifest setup, and strict core smoke tests.
+The current foundation includes a typed application configuration model with validation, a top-level emulator service container, explicit subsystem lifecycle contracts, transactional startup with reverse-order rollback, typed initialization errors, a thread-safe logging adapter, a Qt6 desktop shell, deterministic game discovery, a traversal-safe virtual filesystem, a host-backed page-granular virtual memory manager, a duplicate-safe syscall registry, a bounds-checked PM4 packet parser, CMake install/export metadata, vcpkg manifest setup, and strict core smoke tests.
 
 The emulation subsystems themselves are still intentionally non-functional seams. The project does **not** currently load or run commercial PS4 software. That separation is deliberate: lifecycle, error handling, configuration, and build quality are stabilized before hardware behavior is introduced.
 
@@ -38,6 +38,9 @@ Qt6, Vulkan, spdlog, SDL2, compression, cryptography, and hashing dependencies a
 - **Deterministic shutdown:** services stop in reverse startup order and shutdown is idempotent.
 - **Headless testability:** core configuration and lifecycle behavior can be tested without Qt, Vulkan, or game assets.
 - **Clean boundaries:** UI code depends on the emulator API, not on individual future OS or GPU internals.
+- **Memory safety:** host allocations are page-rounded, tracked, protected, and released only through validated ownership.
+- **Command safety:** malformed PM4 buffers are rejected before any future GPU execution layer sees them.
+- **HLE safety:** unknown syscalls return `-ENOSYS`; duplicate or empty handlers are rejected.
 
 ## Repository layout
 

@@ -28,9 +28,11 @@ add_library(aceps_core STATIC
   src/core/Emulator.cpp
   src/memory/VirtualMemoryManager.cpp
   src/os/Kernel.cpp
+  src/os/SyscallRegistry.cpp
   src/loader/SelfLoader.cpp
   src/filesystem/VirtualFileSystem.cpp
   src/gpu/CommandProcessor.cpp
+  src/gpu/Pm4Parser.cpp
   src/shader/ShaderTranslator.cpp
   src/audio/AudioSystem.cpp
   src/input/InputSystem.cpp

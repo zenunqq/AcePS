@@ -8,11 +8,16 @@
 #include "aceps/core/Emulator.h"
 #include "aceps/core/EmulatorError.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
+#include "aceps/gpu/Pm4Parser.h"
+#include "aceps/memory/VirtualMemoryManager.h"
+#include "aceps/os/SyscallRegistry.h"
 
 #include <cstdlib>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -60,6 +65,28 @@ int main() {
   require(library.refresh(error), "game library scan must succeed");
   require(library.entries().size() == 2, "only directories with sce_sys are cataloged");
   require(library.entries().front().displayName == "Alpha", "library entries are sorted");
+
+  aceps::memory::VirtualMemoryManager memory;
+  void* allocation = memory.allocate(1, aceps::memory::Protection::ReadWrite, error);
+  require(allocation != nullptr, "host memory allocation must succeed");
+  require(memory.allocationCount() == 1, "allocation must be tracked");
+  require(memory.protect(allocation, memory.pageSize(), aceps::memory::Protection::Read, error),
+          "owned allocation protection must succeed");
+  require(memory.release(allocation, memory.pageSize(), error), "owned allocation release must succeed");
+  require(memory.allocationCount() == 0, "release must remove allocation tracking");
+
+  aceps::os::SyscallRegistry syscalls;
+  require(syscalls.registerHandler(42, [](const std::vector<std::uint64_t>& args) {
+            return static_cast<std::int64_t>(args.size());
+          }, error), "syscall handler registration must succeed");
+  require(syscalls.dispatch(42, {1, 2, 3}) == 3, "registered syscall must dispatch");
+  require(syscalls.dispatch(999, {}) < 0, "unknown syscall must return an error");
+
+  std::vector<aceps::gpu::Pm4Packet> packets;
+  const std::vector<std::uint32_t> commandBuffer{0xC0C00000U, 0xDEADBEEFU};
+  require(aceps::gpu::Pm4Parser::parse(commandBuffer, packets, error), "valid PM4 must parse");
+  require(packets.size() == 1 && packets.front().opcode == 0xC0U, "PM4 opcode must decode");
+  require(!aceps::gpu::Pm4Parser::parse({0xC0C00001U, 0xDEADBEEFU}, packets, error), "truncated PM4 must fail");
 
   aceps::core::Emulator emulator(defaults);
   require(emulator.state() == aceps::core::EmulatorState::Created, "emulator starts in Created");
