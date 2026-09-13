@@ -22,6 +22,7 @@ public:
   explicit GameLibrary(std::filesystem::path libraryRoot);
 
   [[nodiscard]] bool refresh(std::string& error);
+  [[nodiscard]] bool addPath(const std::filesystem::path& gamePath, std::string& error);
   [[nodiscard]] const std::vector<GameEntry>& entries() const noexcept;
   [[nodiscard]] const std::filesystem::path& root() const noexcept;
 
