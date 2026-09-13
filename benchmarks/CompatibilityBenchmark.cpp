@@ -70,6 +70,19 @@ int main() {
   print({"async file concurrent reads", successfulReads, milliseconds(elapsed),
          static_cast<double>(successfulReads) / std::chrono::duration<double>(elapsed).count()});
 
+  futures.clear();
+  start = Clock::now();
+  for (std::size_t index = 0; index < reads; ++index) {
+    futures.push_back(files.read((index % 2U == 0U) ? "asset-a.bin" : "asset-b.bin",
+                                 (index * readSize) % (64U * 1024U - readSize), readSize));
+  }
+  successfulReads = 0;
+  for (auto& future : futures) successfulReads += future.get().succeeded() ? 1U : 0U;
+  elapsed = Clock::now() - start;
+  print({"async file cached reads", successfulReads, milliseconds(elapsed),
+         static_cast<double>(successfulReads) / std::chrono::duration<double>(elapsed).count()});
+  std::cout << "  cache entries=" << files.cacheEntries() << " hits=" << files.cacheHits() << '\n';
+
   start = Clock::now();
   std::size_t rejectedReads = 0;
   for (std::size_t index = 0; index < reads; ++index) {

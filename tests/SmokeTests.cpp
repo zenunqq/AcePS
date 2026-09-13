@@ -176,6 +176,8 @@ int main() {
   auto readFuture = fileService.read("asset.bin", 0, 11);
   const auto readResult = readFuture.get();
   require(readResult.succeeded() && readResult.bytes.size() == 11, "async file read must complete");
+  require(fileService.read("asset.bin", 0, 11).get().succeeded(), "cached async file read must complete");
+  require(fileService.cacheHits() == 1 && fileService.cacheEntries() == 1, "file cache must track bounded hits");
   require(!fileService.read("../escape", 0, 1).get().succeeded(), "async path traversal must fail");
   fileService.shutdown();
 

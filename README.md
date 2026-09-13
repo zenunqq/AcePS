@@ -10,6 +10,8 @@ For demanding workloads, the core also includes a bounded multi-worker scheduler
 
 The compatibility layer now also includes validated ELF load planning, a duplicate-safe module/export registry, bounded asynchronous file reads rooted to the virtual filesystem, GPU submission/fence primitives, and low-overhead atomic profiling counters. These components are designed to support streamed open-world workloads while keeping unsafe input and blocking I/O away from emulation hot paths.
 
+The asynchronous file service includes a bounded LRU chunk cache with hit/entry counters and explicit invalidation. This avoids repeatedly opening and reading the same streamed asset ranges while preventing unbounded memory growth.
+
 The emulation subsystems themselves are still intentionally non-functional seams. The project does **not** currently load or run commercial PS4 software. That separation is deliberate: lifecycle, error handling, configuration, and build quality are stabilized before hardware behavior is introduced.
 
 ## Build and test
