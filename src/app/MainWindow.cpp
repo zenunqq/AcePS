@@ -130,8 +130,7 @@ void MainWindow::createLibraryView() {
   connect(settingsButton, &QToolButton::clicked, this, &MainWindow::showSettings);
   topRow->addWidget(settingsButton);
   importButton_ = new QToolButton(content);
-  importButton_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-  importButton_->setText(tr("  Add game"));
+  importButton_->setText(tr("Add game"));
   importButton_->setToolTip(tr("Import a game folder or build"));
   importButton_->setStyleSheet(QStringLiteral("QToolButton { background: #2b9ee8; border: 0; border-radius: 6px; padding: 9px 13px; color: #ffffff; font-weight: 700; } QToolButton:hover { background: #42b2f4; }"));
   connect(importButton_, &QToolButton::clicked, this, &MainWindow::importGame);
@@ -151,16 +150,16 @@ void MainWindow::createLibraryView() {
   heroArtwork_ = new QLabel(hero);
   heroArtwork_->setFixedSize(158, 158);
   heroArtwork_->setAlignment(Qt::AlignCenter);
-  heroArtwork_->setStyleSheet(QStringLiteral("background: #0a1421; border: 1px solid #29425d; border-radius: 8px; color: #4d6d8e; font-size: 46px;"));
-  heroArtwork_->setText(QStringLiteral("＋"));
+  heroArtwork_->setStyleSheet(QStringLiteral("background: #0a1421; border: 1px solid #29425d; border-radius: 8px; color: #6f87a2; font-size: 13px;"));
+  heroArtwork_->setText(tr("No artwork"));
   heroLayout->addWidget(heroArtwork_);
   auto* heroCopy = new QVBoxLayout();
   heroCopy->setSpacing(7);
   heroCopy->addStretch();
-  heroTitle_ = new QLabel(tr("Your library is ready"), hero);
+  heroTitle_ = new QLabel(tr("Games"), hero);
   heroTitle_->setStyleSheet(QStringLiteral("QLabel { background: transparent; border: 0; font-size: 27px; font-weight: 700; color: #ffffff; }"));
   heroCopy->addWidget(heroTitle_);
-  heroSubtitle_ = new QLabel(tr("Add a game folder to see its title screen, icon, and details here."), hero);
+  heroSubtitle_ = new QLabel(tr("Add a game folder or build to begin."), hero);
   heroSubtitle_->setWordWrap(true);
   heroSubtitle_->setStyleSheet(QStringLiteral("QLabel { background: transparent; border: 0; font-size: 14px; color: #94a9bf; }"));
   heroCopy->addWidget(heroSubtitle_);
@@ -169,7 +168,7 @@ void MainWindow::createLibraryView() {
   layout->addWidget(hero);
 
   auto* sectionRow = new QHBoxLayout();
-  auto* libraryTitle = textLabel(tr("Your games"), content,
+  auto* libraryTitle = textLabel(tr("Games"), content,
                                  QStringLiteral("font-size: 18px; font-weight: 700; color: #ffffff;"));
   sectionRow->addWidget(libraryTitle);
   sectionRow->addStretch();
@@ -177,7 +176,7 @@ void MainWindow::createLibraryView() {
                           QStringLiteral("font-size: 12px; color: #71869e;"));
   sectionRow->addWidget(count);
   layout->addLayout(sectionRow);
-  emptyState_ = new QLabel(tr("No games added yet\n\nUse  Add game  to import a build or folder."), content);
+  emptyState_ = new QLabel(tr("No games added yet\n\nUse Add game to import a build or folder."), content);
   emptyState_->setAlignment(Qt::AlignCenter);
   emptyState_->setMinimumHeight(130);
   emptyState_->setStyleSheet(QStringLiteral("background: #0e1928; border: 1px dashed #2b435d; border-radius: 8px; color: #8096ad; font-size: 14px;"));
@@ -213,8 +212,8 @@ void MainWindow::refreshLibrary() {
   emptyState_->setVisible(empty);
   gameList_->setVisible(!empty);
   if (empty) {
-    heroTitle_->setText(tr("Your library is ready"));
-    heroSubtitle_->setText(tr("Add a game folder to see its title screen, icon, and details here."));
+    heroTitle_->setText(tr("Games"));
+    heroSubtitle_->setText(tr("Add a game folder or build to begin."));
     statusLabel_->setText(tr("No games added yet"));
   } else {
     selectGame(0);
@@ -230,7 +229,7 @@ void MainWindow::selectGame(int row) {
 void MainWindow::updateHero(const GameEntry* game) {
   if (game == nullptr) return;
   heroTitle_->setText(QString::fromStdString(game->displayName));
-  heroSubtitle_->setText(tr("Ready to launch  •  %1").arg(QString::fromStdString(game->titleId)));
+  heroSubtitle_->setText(tr("Ready to launch — %1").arg(QString::fromStdString(game->titleId)));
   const auto iconPath = game->root / "sce_sys" / "icon0.png";
   if (std::filesystem::exists(iconPath)) {
     heroArtwork_->setPixmap(QPixmap(QString::fromStdString(iconPath.string())).scaled(heroArtwork_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
