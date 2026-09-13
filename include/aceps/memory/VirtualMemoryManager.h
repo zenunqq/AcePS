@@ -28,11 +28,13 @@ public:
   [[nodiscard]] bool release(void* address, std::size_t size, std::string& error);
   [[nodiscard]] std::size_t pageSize() const noexcept;
   [[nodiscard]] std::size_t allocationCount() const noexcept;
+  [[nodiscard]] std::size_t allocatedBytes() const noexcept;
 
 private:
   [[nodiscard]] std::size_t roundToPage(std::size_t size) const;
   std::size_t pageSize_;
   std::unordered_map<void*, std::size_t> allocations_;
+  std::size_t allocatedBytes_{0};
   mutable std::mutex mutex_;
 };
 

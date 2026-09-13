@@ -70,10 +70,12 @@ int main() {
   void* allocation = memory.allocate(1, aceps::memory::Protection::ReadWrite, error);
   require(allocation != nullptr, "host memory allocation must succeed");
   require(memory.allocationCount() == 1, "allocation must be tracked");
+  require(memory.allocatedBytes() == memory.pageSize(), "allocation bytes must be page-rounded");
   require(memory.protect(allocation, memory.pageSize(), aceps::memory::Protection::Read, error),
           "owned allocation protection must succeed");
   require(memory.release(allocation, memory.pageSize(), error), "owned allocation release must succeed");
   require(memory.allocationCount() == 0, "release must remove allocation tracking");
+  require(memory.allocatedBytes() == 0, "release must clear byte accounting");
 
   aceps::os::SyscallRegistry syscalls;
   require(syscalls.registerHandler(42, [](const std::vector<std::uint64_t>& args) {
@@ -87,6 +89,13 @@ int main() {
   require(aceps::gpu::Pm4Parser::parse(commandBuffer, packets, error), "valid PM4 must parse");
   require(packets.size() == 1 && packets.front().opcode == 0xC0U, "PM4 opcode must decode");
   require(!aceps::gpu::Pm4Parser::parse({0xC0C00001U, 0xDEADBEEFU}, packets, error), "truncated PM4 must fail");
+  std::vector<aceps::gpu::Pm4PacketView> views;
+  require(aceps::gpu::Pm4Parser::parseViews(commandBuffer, views, error), "zero-copy PM4 must parse");
+  require(views.size() == 1 && views.front().payload.data() == commandBuffer.data() + 1,
+          "PM4 view must borrow command-buffer storage");
+  require(views.front().payload.front() == 0xDEADBEEFU, "PM4 view payload must be readable");
+
+  require(syscalls.dispatchCount() == 2, "syscall statistics must count known and unknown dispatches");
 
   aceps::core::Emulator emulator(defaults);
   require(emulator.state() == aceps::core::EmulatorState::Created, "emulator starts in Created");

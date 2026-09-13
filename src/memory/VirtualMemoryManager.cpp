@@ -86,6 +86,7 @@ void* VirtualMemoryManager::allocate(std::size_t size, Protection protection, st
   if (address == nullptr) return nullptr;
   std::scoped_lock lock(mutex_);
   allocations_.emplace(address, rounded);
+  allocatedBytes_ += rounded;
   error.clear();
   return address;
 }
@@ -134,6 +135,7 @@ bool VirtualMemoryManager::release(void* address, std::size_t size, std::string&
   }
 #endif
   allocations_.erase(found);
+  allocatedBytes_ -= rounded;
   error.clear();
   return true;
 }
@@ -142,6 +144,10 @@ std::size_t VirtualMemoryManager::pageSize() const noexcept { return pageSize_; 
 std::size_t VirtualMemoryManager::allocationCount() const noexcept {
   std::scoped_lock lock(mutex_);
   return allocations_.size();
+}
+std::size_t VirtualMemoryManager::allocatedBytes() const noexcept {
+  std::scoped_lock lock(mutex_);
+  return allocatedBytes_;
 }
 
 } // namespace aceps::memory

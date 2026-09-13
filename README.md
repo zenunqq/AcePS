@@ -28,6 +28,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+For a local PM4 throughput measurement, configure with `-DACEPS_BUILD_BENCHMARKS=ON` and run `build/aceps_pm4_benchmark`. The parser exposes zero-copy packet views for command-processing hot paths while retaining an owning compatibility API for callers that need independent packet storage.
+
 Qt6, Vulkan, spdlog, SDL2, compression, cryptography, and hashing dependencies are declared in `vcpkg.json`. The setup scripts bootstrap vcpkg and configure the full GUI build.
 
 ## Architecture guarantees

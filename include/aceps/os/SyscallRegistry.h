@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 #include <functional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,9 +26,12 @@ public:
                                        const std::vector<std::uint64_t>& arguments) const;
   [[nodiscard]] bool contains(SyscallNumber number) const noexcept;
   [[nodiscard]] std::size_t size() const noexcept;
+  [[nodiscard]] std::size_t dispatchCount() const noexcept;
 
 private:
   std::unordered_map<SyscallNumber, SyscallHandler> handlers_;
+  mutable std::shared_mutex mutex_;
+  mutable std::atomic<std::size_t> dispatchCount_{0};
 };
 
 } // namespace aceps::os
