@@ -29,6 +29,7 @@ constexpr std::uint8_t kItNop = 0x10;
 constexpr std::uint8_t kItDrawIndex2 = 0x27;
 constexpr std::uint8_t kItIndirectBuffer = 0x3F;
 constexpr std::uint8_t kItSetContextReg = 0x69;
+constexpr std::uint8_t kItSetShReg = 0x76;
 constexpr std::uint8_t kItDrawIndexAuto = 0x2D;
 constexpr std::uint8_t kItDispatchDirect = 0x15;
 constexpr std::size_t kMaxIndirectDepth = 32;
@@ -412,6 +413,28 @@ bool CommandProcessor::submit(std::span<const std::uint32_t> words, std::string&
   return true;
 }
 
+bool CommandProcessor::translateShaderModule(std::span<const std::uint32_t> bytecode,
+                                             shader::ShaderType type,
+                                             std::string& error) {
+  std::size_t hash = 1469598103934665603ULL;
+  for (const auto word : bytecode) {
+    hash ^= static_cast<std::size_t>(word);
+    hash *= 1099511628211ULL;
+  }
+  hash ^= static_cast<std::size_t>(type);
+  if (shaderModules_.contains(hash)) return true;
+  std::vector<std::uint32_t> spirv;
+  if (!shader::ShaderTranslator::translate(bytecode, type, spirv, error)) return false;
+  VkShaderModuleCreateInfo createInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+  createInfo.codeSize = spirv.size() * sizeof(std::uint32_t);
+  createInfo.pCode = spirv.data();
+  VkShaderModule module = VK_NULL_HANDLE;
+  if (!checkResult(vkCreateShaderModule(device_, &createInfo, nullptr, &module),
+                   "vkCreateShaderModule", error)) return false;
+  shaderModules_.emplace(hash, module);
+  return true;
+}
+
 bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error, std::size_t depth) {
   if (depth > kMaxIndirectDepth) {
     error = "PM4 indirect-buffer nesting is too deep";
@@ -441,6 +464,15 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
       contextRegisters_[packet.payload[index]] = packet.payload[index + 1];
     }
     return true;
+  case kItSetShReg:
+    // The safe inline form carries a register/value pair followed by bytecode.
+    // Guest-address-backed shader memory is resolved before submission.
+    if (packet.payload.size() < 3) return true;
+    contextRegisters_[packet.payload[0]] = packet.payload[1];
+    return translateShaderModule(packet.payload.subspan(2),
+                                  packet.payload[0] == 0x2C00U ? shader::ShaderType::Vertex
+                                                               : shader::ShaderType::Fragment,
+                                  error);
   case kItDrawIndex2:
     if (packet.payload.empty()) { error = "PM4 indexed draw packet is truncated"; return false; }
     if (hasSurface_ && !renderPassActive_) {
@@ -490,6 +522,11 @@ void CommandProcessor::shutdown() noexcept {
   std::scoped_lock lock(mutex_);
   if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
   destroySwapchainResources();
+  for (const auto& [hash, module] : shaderModules_) {
+    (void)hash;
+    vkDestroyShaderModule(device_, module, nullptr);
+  }
+  shaderModules_.clear();
   if (device_ != VK_NULL_HANDLE && commandPool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, commandPool_, nullptr);
   commandPool_ = VK_NULL_HANDLE;
   commandBuffers_.clear();

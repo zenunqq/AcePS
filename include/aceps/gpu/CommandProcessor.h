@@ -5,6 +5,7 @@
 #pragma once
 
 #include "aceps/gpu/Pm4Parser.h"
+#include "aceps/shader/ShaderTranslator.h"
 
 #include <vulkan/vulkan.h>
 
@@ -71,6 +72,9 @@ private:
   [[nodiscard]] bool checkResult(VkResult result, const char* operation,
                                  std::string& error) const;
   void destroySwapchainResources() noexcept;
+  [[nodiscard]] bool translateShaderModule(std::span<const std::uint32_t> bytecode,
+                                           shader::ShaderType type,
+                                           std::string& error);
 
   mutable std::mutex mutex_;
   VkInstance instance_{VK_NULL_HANDLE};
@@ -99,6 +103,7 @@ private:
   bool initialized_{false};
   RenderState state_{};
   std::unordered_map<std::uint32_t, std::uint32_t> contextRegisters_;
+  std::unordered_map<std::size_t, VkShaderModule> shaderModules_;
 };
 
 } // namespace aceps::gpu
