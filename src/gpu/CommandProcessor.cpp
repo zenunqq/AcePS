@@ -3,6 +3,8 @@
  * supported PM4 packet subset. It can run without a window for CLI tests.
  */
 #include "aceps/gpu/CommandProcessor.h"
+#include "aceps/gpu/FramePresenter.h"
+#include "aceps/gpu/TextureCache.h"
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -14,6 +16,9 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 #if defined(__linux__)
 #include <X11/Xlib.h>
@@ -32,12 +37,28 @@ constexpr std::uint8_t kItSetContextReg = 0x69;
 constexpr std::uint8_t kItSetShReg = 0x76;
 constexpr std::uint8_t kItDrawIndexAuto = 0x2D;
 constexpr std::uint8_t kItDispatchDirect = 0x15;
+constexpr std::uint8_t kItEventWrite = 0x46;
 constexpr std::size_t kMaxIndirectDepth = 32;
 
 bool hasLayer(const std::vector<VkLayerProperties>& layers, const char* name) {
   return std::any_of(layers.begin(), layers.end(), [name](const auto& layer) {
     return std::strcmp(layer.layerName, name) == 0;
   });
+}
+
+struct CommandExtras final {
+  FramePresenter presenter;
+  TextureCache textures;
+  bool presenterActive{false};
+};
+
+std::mutex extrasMutex;
+std::unordered_map<const CommandProcessor*, std::unique_ptr<CommandExtras>> extras;
+
+CommandExtras* commandExtras(const CommandProcessor* processor) noexcept {
+  std::scoped_lock lock(extrasMutex);
+  const auto found = extras.find(processor);
+  return found == extras.end() ? nullptr : found->second.get();
 }
 
 } // namespace
@@ -308,14 +329,36 @@ bool CommandProcessor::initialize(const NativeWindowHandle* windowHandle,
   shutdown();
   contextTracker_ = ContextTracker{};
   if (!createInstance(error) || !createSurface(windowHandle, error) || !selectPhysicalDevice(error) ||
-      !createDevice(error) || !createSwapchain(width, height, error) || !createRenderPass(error) ||
-      !createFramebuffers(error) || !createCommandResources(error)) {
+      !createDevice(error)) {
     shutdown();
     return false;
   }
   if (!pipelineCache_.init(device_, error)) {
     shutdown();
     return false;
+  }
+  auto commandExtra = std::make_unique<CommandExtras>();
+  if (!commandExtra->textures.init(device_, physicalDevice_, nullptr, error)) {
+    shutdown();
+    return false;
+  }
+  if (hasSurface_) {
+    std::string presenterError;
+    if (!commandExtra->presenter.init(instance_, physicalDevice_, device_, surface_, width, height,
+                                     graphicsFamily_, presentFamily_, presenterError)) {
+      error = "FramePresenter: " + presenterError;
+      shutdown();
+      return false;
+    }
+    commandExtra->presenterActive = true;
+    renderPass_ = commandExtra->presenter.renderPass();
+  } else if (!createCommandResources(error)) {
+    shutdown();
+    return false;
+  }
+  {
+    std::scoped_lock extraLock(extrasMutex);
+    extras.emplace(this, std::move(commandExtra));
   }
   width_ = width;
   height_ = height;
@@ -327,6 +370,13 @@ bool CommandProcessor::initialize(const NativeWindowHandle* windowHandle,
 bool CommandProcessor::beginFrame(std::string& error) {
   std::scoped_lock lock(mutex_);
   if (!initialized_ || frameActive_) return false;
+  if (auto* commandExtra = commandExtras(this); commandExtra != nullptr && commandExtra->presenterActive) {
+    if (!commandExtra->presenter.beginFrame(activeCommandBuffer_, imageIndex_, error)) return false;
+    frameActive_ = true;
+    renderPassActive_ = false;
+    error.clear();
+    return true;
+  }
   if (hasSurface_) {
     const auto result = vkAcquireNextImageKHR(device_, swapchain_, std::numeric_limits<std::uint64_t>::max(), VK_NULL_HANDLE, VK_NULL_HANDLE, &imageIndex_);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
@@ -352,6 +402,12 @@ bool CommandProcessor::endFrame(std::string& error) {
     vkCmdEndRenderPass(activeCommandBuffer_);
     renderPassActive_ = false;
   }
+  if (auto* commandExtra = commandExtras(this); commandExtra != nullptr && commandExtra->presenterActive) {
+    if (!commandExtra->presenter.present(activeCommandBuffer_, VK_NULL_HANDLE, error)) return false;
+    frameActive_ = false;
+    error.clear();
+    return true;
+  }
   if (!checkResult(vkEndCommandBuffer(activeCommandBuffer_), "vkEndCommandBuffer", error)) return false;
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1;
@@ -375,7 +431,9 @@ bool CommandProcessor::endFrame(std::string& error) {
 
 bool CommandProcessor::clearScreen(float red, float green, float blue, std::string& error) {
   if (!frameActive_ && !beginFrame(error)) return false;
-  if (hasSurface_ && !renderPassActive_) {
+  auto* commandExtra = commandExtras(this);
+  const bool presenterActive = commandExtra != nullptr && commandExtra->presenterActive;
+  if (hasSurface_ && !renderPassActive_ && !presenterActive) {
     VkClearColorValue color{{red, green, blue, 1.0F}};
     VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -399,10 +457,23 @@ bool CommandProcessor::clearScreen(float red, float green, float blue, std::stri
   if (hasSurface_ && !renderPassActive_) {
     VkRenderPassBeginInfo render{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     render.renderPass = renderPass_;
-    render.framebuffer = framebuffers_[imageIndex_];
+    render.framebuffer = presenterActive ? commandExtra->presenter.framebuffer(imageIndex_)
+                                         : framebuffers_[imageIndex_];
+    if (auto* commandExtra = commandExtras(this); commandExtra != nullptr && commandExtra->presenterActive) {
+      render.framebuffer = commandExtra->presenter.framebuffer(imageIndex_);
+    }
     render.renderArea.extent = {width_, height_};
     vkCmdBeginRenderPass(activeCommandBuffer_, &render, VK_SUBPASS_CONTENTS_INLINE);
     renderPassActive_ = true;
+    if (presenterActive) {
+      VkClearAttachment clear{};
+      clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      clear.clearValue.color = {{red, green, blue, 1.0F}};
+      VkClearRect rect{};
+      rect.rect.extent = {width_, height_};
+      rect.layerCount = 1;
+      vkCmdClearAttachments(activeCommandBuffer_, 1, &clear, 1, &rect);
+    }
   }
   error.clear();
   return true;
@@ -470,6 +541,10 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
     return false;
   }
   if (packet.type != Pm4PacketType::Type3) return true;
+  if (packet.opcode == kItEventWrite) {
+    if (auto* commandExtra = commandExtras(this); commandExtra != nullptr) commandExtra->textures.invalidateRange(0, std::numeric_limits<std::uint64_t>::max() - 1U);
+    return true;
+  }
   switch (packet.opcode) {
   case kItNop:
     return true;
@@ -509,6 +584,16 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
     if (hasSurface_ && !renderPassActive_) {
       if (!clearScreen(0.0F, 0.0F, 0.0F, error)) return false;
     }
+    if (auto* commandExtra = commandExtras(this); commandExtra != nullptr) {
+      for (std::size_t texture = 0; texture < 16; ++texture) {
+        std::uint32_t descriptor[8]{};
+        for (std::size_t word = 0; word < 8; ++word) {
+          const auto found = contextRegisters_.find(static_cast<std::uint32_t>(texture * 8U + word));
+          if (found != contextRegisters_.end()) descriptor[word] = found->second;
+        }
+        if (descriptor[0] != 0U) { std::string textureError; (void)commandExtra->textures.getOrUpload(descriptor, activeCommandBuffer_, textureError); }
+      }
+    }
     if (!bindGraphicsPipeline(error)) return false;
     vkCmdDrawIndexed(activeCommandBuffer_, packet.payload[0], packet.payload.size() > 1 ? packet.payload[1] : 1, 0, 0, 0);
     contextTracker_.clearDirty();
@@ -516,6 +601,16 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
   case kItDrawIndexAuto:
     if (packet.payload.empty()) { error = "PM4 automatic draw packet is truncated"; return false; }
     if (hasSurface_ && !renderPassActive_ && !clearScreen(0.0F, 0.0F, 0.0F, error)) return false;
+    if (auto* commandExtra = commandExtras(this); commandExtra != nullptr) {
+      for (std::size_t texture = 0; texture < 16; ++texture) {
+        std::uint32_t descriptor[8]{};
+        for (std::size_t word = 0; word < 8; ++word) {
+          const auto found = contextRegisters_.find(static_cast<std::uint32_t>(texture * 8U + word));
+          if (found != contextRegisters_.end()) descriptor[word] = found->second;
+        }
+        if (descriptor[0] != 0U) { std::string textureError; (void)commandExtra->textures.getOrUpload(descriptor, activeCommandBuffer_, textureError); }
+      }
+    }
     if (!bindGraphicsPipeline(error)) return false;
     vkCmdDraw(activeCommandBuffer_, packet.payload[0], packet.payload.size() > 1 ? packet.payload[1] : 1, 0, 0);
     contextTracker_.clearDirty();
@@ -553,6 +648,22 @@ void CommandProcessor::destroySwapchainResources() noexcept {
 void CommandProcessor::shutdown() noexcept {
   std::scoped_lock lock(mutex_);
   if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+  {
+    std::unique_ptr<CommandExtras> commandExtra;
+    {
+      std::scoped_lock extraLock(extrasMutex);
+      const auto found = extras.find(this);
+      if (found != extras.end()) {
+        commandExtra = std::move(found->second);
+        extras.erase(found);
+      }
+    }
+    if (commandExtra) {
+      commandExtra->textures.destroy();
+      commandExtra->presenter.destroy();
+      if (hasSurface_) renderPass_ = VK_NULL_HANDLE;
+    }
+  }
   pipelineCache_.destroy();
   destroySwapchainResources();
   for (const auto& [hash, module] : shaderModules_) {

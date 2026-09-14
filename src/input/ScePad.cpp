@@ -1,36 +1,46 @@
-/* ScePad.cpp registers the initial libScePad HLE exports. */
+/* ScePad.cpp registers libScePad HLE exports with the fixed PS4 syscall ABI. */
 #include "aceps/input/ScePad.h"
 #include "aceps/input/InputSystem.h"
 #include "aceps/os/SyscallRegistry.h"
 
-#include <cerrno>
 #include <cstring>
 #include <utility>
+#include <vector>
 
 namespace aceps::input {
 namespace {
-// These IDs are kept in one place so the ABI table can be replaced by the
-// title-specific resolver when module export metadata becomes available.
-constexpr std::uint32_t kOpen = 700U;
-constexpr std::uint32_t kClose = 701U;
-constexpr std::uint32_t kRead = 702U;
-constexpr std::uint32_t kSetVibration = 703U;
-constexpr std::uint32_t kSetLightBar = 704U;
-constexpr std::uint32_t kGetConnectionStatus = 705U;
-constexpr std::uint32_t kIsConnected = 706U;
+constexpr std::uint32_t kInit = 580U;
+constexpr std::uint32_t kOpen = 581U;
+constexpr std::uint32_t kClose = 582U;
+constexpr std::uint32_t kReadState = 583U;
+constexpr std::uint32_t kRead = 584U;
+constexpr std::uint32_t kSetMotionSensorState = 585U;
+constexpr std::uint32_t kGetControllerInformation = 586U;
+constexpr std::uint32_t kSetLightBar = 587U;
+constexpr std::uint32_t kResetLightBar = 588U;
+constexpr std::uint32_t kSetVibration = 589U;
 
-bool decodeHandle(const std::vector<std::uint64_t>& args, int& slot) noexcept {
+struct SceControllerInformation final {
+  std::uint8_t touchpadPixelDensity{44};
+  std::uint8_t stickDeadZoneLeft{13};
+  std::uint8_t stickDeadZoneRight{13};
+  std::uint8_t connectionType{1};
+  std::uint8_t connectedCount{0};
+  std::uint8_t _pad[3]{};
+};
+
+bool handleToSlot(const std::vector<std::uint64_t>& args, int& slot) noexcept {
   if (args.empty() || args[0] < 1U || args[0] > 4U) return false;
   slot = static_cast<int>(args[0] - 1U);
   return true;
 }
 
-os::SyscallResult copyState(InputSystem& input, const std::vector<std::uint64_t>& args) {
+os::SyscallResult readOne(InputSystem& input, const std::vector<std::uint64_t>& args) {
   int slot = 0;
-  if (!decodeHandle(args, slot) || args.size() < 2 || args[1] == 0) return SCE_PAD_ERROR_INVALID_ARG;
+  if (!handleToSlot(args, slot) || args.size() < 2 || args[1] == 0) return SCE_PAD_ERROR_INVALID_ARG;
   ScePadData state{};
-  std::string error;
-  if (!input.readState(slot, state, error)) return SCE_PAD_ERROR_INVALID_HANDLE;
+  std::string localError;
+  if (!input.readState(slot, state, localError)) return SCE_PAD_ERROR_INVALID_HANDLE;
   std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(args[1])), &state, sizeof(state));
   return 0;
 }
@@ -42,54 +52,65 @@ bool ScePad::registerHandlers(InputSystem& input, os::SyscallRegistry& registry,
   const auto add = [&registry, &error](const std::uint32_t number, os::SyscallHandler handler) {
     return registry.registerHandler(number, std::move(handler), error);
   };
-  if (!add(kOpen, [&input](const auto& args) {
-        if (args.empty() || args[0] > 3U) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
-        const auto slot = static_cast<int>(args[0]);
+  if (!add(kInit, [&input](const auto&) {
         std::string localError;
-        if (!input.openSlot(slot, localError)) {
-          return static_cast<os::SyscallResult>(input.isSlotOpen(slot) ? SCE_PAD_ERROR_ALREADY_OPENED
-                                                                        : SCE_PAD_ERROR_INVALID_ARG);
-        }
+        return static_cast<os::SyscallResult>(input.initialize(localError) ? 0 : SCE_PAD_ERROR_NO_DEVICE);
+      }) ||
+      !add(kOpen, [&input](const auto& args) {
+        if (args.size() < 3 || args[2] > 3U) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+        const auto slot = static_cast<int>(args[2]);
+        std::string localError;
+        if (!input.openSlot(slot, localError)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_ALREADY_OPENED);
         return static_cast<os::SyscallResult>(slot + 1);
       }) ||
       !add(kClose, [&input](const auto& args) {
         int slot = 0;
-        if (!decodeHandle(args, slot)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
+        if (!handleToSlot(args, slot)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
         std::string localError;
-        return input.closeSlot(slot, localError) ? static_cast<os::SyscallResult>(0)
-                                                 : static_cast<os::SyscallResult>(SCE_PAD_ERROR_NOT_OPENED);
+        return static_cast<os::SyscallResult>(input.closeSlot(slot, localError) ? 0 : SCE_PAD_ERROR_NOT_OPENED);
       }) ||
-      !add(kRead, [&input](const auto& args) { return copyState(input, args); }) ||
-      !add(kSetVibration, [&input](const auto& args) {
+      !add(kReadState, [&input](const auto& args) { return readOne(input, args); }) ||
+      !add(kRead, [&input](const auto& args) {
+        if (args.size() < 3 || args[2] == 0) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+        const auto result = readOne(input, {args[0], args[1]});
+        return result == 0 ? static_cast<os::SyscallResult>(1) : result;
+      }) ||
+      !add(kSetMotionSensorState, [&input](const auto& args) {
         int slot = 0;
-        if (!decodeHandle(args, slot) || args.size() < 3) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
-        input.setRumble(slot, static_cast<std::uint8_t>(args[1]), static_cast<std::uint8_t>(args[2]));
+        if (!handleToSlot(args, slot) || args.size() < 2) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+        (void)input;
+        return static_cast<os::SyscallResult>(0);
+      }) ||
+      !add(kGetControllerInformation, [&input](const auto& args) {
+        int slot = 0;
+        if (!handleToSlot(args, slot) || args.size() < 2 || args[1] == 0) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+        ScePadData state{};
+        std::string localError;
+        if (!input.readState(slot, state, localError)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
+        SceControllerInformation info{};
+        info.connectedCount = state.connectedCount;
+        std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(args[1])), &info, sizeof(info));
         return static_cast<os::SyscallResult>(0);
       }) ||
       !add(kSetLightBar, [&input](const auto& args) {
         int slot = 0;
-        if (!decodeHandle(args, slot) || args.size() < 4) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
-        input.setLed(slot, static_cast<std::uint8_t>(args[1]), static_cast<std::uint8_t>(args[2]), static_cast<std::uint8_t>(args[3]));
+        if (!handleToSlot(args, slot) || args.size() < 2 || args[1] == 0) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+        const auto* color = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(args[1]));
+        input.setLed(slot, color[0], color[1], color[2]);
         return static_cast<os::SyscallResult>(0);
       }) ||
-      !add(kGetConnectionStatus, [&input](const auto& args) {
-        if (args.empty() || args[0] == 0) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+      !add(kResetLightBar, [&input](const auto& args) {
         int slot = 0;
-        if (!decodeHandle(args, slot)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
-        if (args.size() < 2 || args[1] == 0) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
-        ScePadData state{};
-        std::string localError;
-        if (!input.readState(slot, state, localError)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
-        std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(args[1])), &state.connected, sizeof(state.connected));
+        if (!handleToSlot(args, slot)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
+        input.setLed(slot, 0, 0, 255);
         return static_cast<os::SyscallResult>(0);
       }) ||
-      !add(kIsConnected, [&input](const auto& args) {
+      !add(kSetVibration, [&input](const auto& args) {
         int slot = 0;
-        if (!decodeHandle(args, slot)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
-        ScePadData state{};
-        std::string localError;
-        if (!input.readState(slot, state, localError)) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_HANDLE);
-        return static_cast<os::SyscallResult>(state.connected != 0U ? 1 : 0);
+        if (!handleToSlot(args, slot) || args.size() < 2 || args[1] == 0) return static_cast<os::SyscallResult>(SCE_PAD_ERROR_INVALID_ARG);
+        const auto* vibration = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(args[1]));
+        input.setRumble(slot, vibration[0], vibration[1]);
+        return static_cast<os::SyscallResult>(0);
       })) return false;
   error.clear();
   return true;

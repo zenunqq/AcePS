@@ -55,6 +55,7 @@ add_library(aceps_core STATIC
   src/audio/AudioSystem.cpp
   src/audio/SceAudioOut.cpp
   src/input/InputSystem.cpp
+  src/input/ScePad.cpp
 )
 
 if(WIN32)

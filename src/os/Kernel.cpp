@@ -6,6 +6,8 @@
 
 #include "aceps/common/Logging.h"
 #include "aceps/audio/SceAudioOut.h"
+#include "aceps/input/InputSystem.h"
+#include "aceps/input/ScePad.h"
 #include "aceps/loader/PkgLoader.h"
 
 #include <cerrno>
@@ -15,6 +17,9 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -64,6 +69,8 @@ constexpr SyscallNumber kIsNeoMode = 615;
 constexpr std::size_t kMaxPrintfLength = 4096;
 
 thread_local std::uint64_t currentGuestThreadId = 1;
+std::mutex inputSystemsMutex;
+std::unordered_map<KernelSubsystem*, std::unique_ptr<aceps::input::InputSystem>> inputSystems;
 
 SyscallResult errorResult() noexcept { return -static_cast<SyscallResult>(errno == 0 ? EIO : errno); }
 
@@ -202,7 +209,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     error.clear();
     return true;
   }
-  if (registry_.size() == 37) {
+  if (registry_.size() >= 37) {
     initialized_ = true;
     error.clear();
     return true;
@@ -213,6 +220,18 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
   };
   if (!moduleLoader_.initializeStubs(error)) return false;
   if (!audio_.initialize(error) || !audio::SceAudioOut::registerHandlers(audio_, registry_, error)) return false;
+  auto inputSystem = std::make_unique<aceps::input::InputSystem>();
+  std::string inputError;
+  if (!inputSystem->initialize(inputError)) {
+    aceps::logging::warn("InputSystem init failed: " + inputError);
+  }
+  if (!aceps::input::ScePad::registerHandlers(*inputSystem, registry_, inputError)) {
+    aceps::logging::warn("ScePad handler registration failed: " + inputError);
+  }
+  {
+    std::scoped_lock lock(inputSystemsMutex);
+    inputSystems.emplace(this, std::move(inputSystem));
+  }
   if (!registerHandler(kExit, [](const auto& arguments) { return handleExit(arguments); }) ||
       !registerHandler(kMmap, [this](const auto& arguments) { return handleMmap(memory_, arguments); }) ||
       !registerHandler(kMunmap, [this](const auto& arguments) { return handleMunmap(memory_, arguments); }) ||
@@ -430,6 +449,11 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
         const auto* words = reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(arguments[0]));
         const auto count = static_cast<std::size_t>(arguments[1]);
         if (words == nullptr || count == 0) return static_cast<SyscallResult>(-EINVAL);
+        {
+          std::scoped_lock lock(inputSystemsMutex);
+          const auto found = inputSystems.find(this);
+          if (found != inputSystems.end()) found->second->pump();
+        }
         std::string error;
         if (!commandProcessor_->submit(std::span<const std::uint32_t>(words, count), error) ||
             !commandProcessor_->endFrame(error)) {
@@ -447,6 +471,15 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
 }
 
 void KernelSubsystem::shutdown() noexcept {
+  {
+    aceps::input::InputSystem* inputSystem = nullptr;
+    {
+      std::scoped_lock lock(inputSystemsMutex);
+      const auto found = inputSystems.find(this);
+      if (found != inputSystems.end()) inputSystem = found->second.get();
+    }
+    if (inputSystem) inputSystem->shutdown();
+  }
   audio_.shutdown();
   std::vector<std::thread> workers;
   {

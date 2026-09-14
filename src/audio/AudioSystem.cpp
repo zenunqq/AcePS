@@ -1,4 +1,4 @@
-/* AudioSystem.cpp implements fixed-capacity PCM ports and a software-safe backend. */
+/* AudioSystem.cpp implements fixed-capacity PCM ports and an SDL3 playback backend. */
 #include "aceps/audio/AudioSystem.h"
 #include "aceps/audio/SceAudioOut.h"
 #include "aceps/os/SyscallRegistry.h"
@@ -11,17 +11,39 @@
 #include <thread>
 #include <vector>
 
+#if defined(ACEPS_HAS_SDL3)
+#include <SDL3/SDL.h>
+#endif
+
 namespace aceps::audio {
 namespace {
-std::size_t sampleSize(AudioFormat format) noexcept { return format == AudioFormat::S16Mono || format == AudioFormat::S16Stereo ? sizeof(std::int16_t) : sizeof(float); }
+std::size_t sampleSize(const AudioFormat format) noexcept {
+  return format == AudioFormat::S16Mono || format == AudioFormat::S16Stereo ? sizeof(std::int16_t) : sizeof(float);
+}
+
+struct BackendPortView final {
+  std::int32_t handle{0};
+  AudioFormat format{AudioFormat::S16Stereo};
+  std::uint32_t sampleRate{48000};
+  std::uint32_t framesPerBlock{256};
+  std::size_t channels{2};
+  std::int32_t volume[2]{32768, 32768};
+  std::unique_ptr<AudioRingBuffer<std::int16_t>> s16;
+  std::unique_ptr<AudioRingBuffer<float>> floats;
+};
 
 struct SoftwareBackend final {
-  bool open(AudioFormat, std::uint32_t rate, std::uint32_t channels, std::string& error) noexcept {
-    if (rate == 0 || channels == 0) { error = "invalid audio device format"; return false; }
-    error.clear(); return true;
-  }
-  void close() noexcept {}
-  void pause(bool) noexcept {}
+  void* stream_{nullptr};
+  void* port_{nullptr};
+  bool sdlInited_{false};
+  bool open(AudioFormat format, std::uint32_t rate, std::uint32_t channels,
+            void* ownerPort, std::string& error) noexcept;
+  void close() noexcept;
+  void pause(bool paused) noexcept;
+#if defined(ACEPS_HAS_SDL3)
+  static void sdlCallback(void* userdata, SDL_AudioStream* stream,
+                          int additionalAmount, int totalAmount) noexcept;
+#endif
 };
 } // namespace
 
@@ -40,6 +62,81 @@ struct AudioSystem::Port final {
   [[nodiscard]] std::uint64_t underruns() const noexcept { return s16 ? s16->underrun_count() : floats->underrun_count(); }
 };
 
+bool SoftwareBackend::open(const AudioFormat format, const std::uint32_t rate,
+                           const std::uint32_t channels, void* ownerPort,
+                           std::string& error) noexcept {
+  if (rate == 0 || channels == 0) { error = "invalid audio device format"; return false; }
+  (void)format;
+  port_ = ownerPort;
+#if defined(ACEPS_HAS_SDL3)
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { error = SDL_GetError(); port_ = nullptr; return false; }
+  sdlInited_ = true;
+  SDL_AudioSpec spec{};
+  spec.freq = static_cast<int>(rate);
+  spec.channels = static_cast<int>(channels);
+  spec.format = format == AudioFormat::S16Mono || format == AudioFormat::S16Stereo ? SDL_AUDIO_S16 : SDL_AUDIO_F32;
+  auto* stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
+                                            &SoftwareBackend::sdlCallback, this);
+  if (stream == nullptr) {
+    error = SDL_GetError();
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    sdlInited_ = false;
+    port_ = nullptr;
+    return false;
+  }
+  stream_ = stream;
+  SDL_ResumeAudioStreamDevice(stream);
+#endif
+  error.clear();
+  return true;
+}
+
+#if defined(ACEPS_HAS_SDL3)
+void SoftwareBackend::sdlCallback(void* userdata, SDL_AudioStream* stream,
+                                  const int additionalAmount, const int totalAmount) noexcept {
+  (void)totalAmount;
+  auto* self = static_cast<SoftwareBackend*>(userdata);
+  if (self == nullptr || self->port_ == nullptr || additionalAmount <= 0) return;
+  auto* port = static_cast<BackendPortView*>(self->port_);
+  constexpr int kBufferSize = 8192;
+  std::uint8_t buffer[kBufferSize]{};
+  const auto wanted = std::min(additionalAmount, kBufferSize);
+  std::size_t produced = 0;
+  if (port->s16) {
+    const auto frames = static_cast<std::size_t>(wanted) / (sizeof(std::int16_t) * port->channels);
+    produced = port->s16->pop(buffer, frames) * sizeof(std::int16_t) * port->channels;
+  } else if (port->floats) {
+    const auto frames = static_cast<std::size_t>(wanted) / (sizeof(float) * port->channels);
+    produced = port->floats->pop(buffer, frames) * sizeof(float) * port->channels;
+  }
+  if (produced < static_cast<std::size_t>(wanted)) {
+    std::memset(buffer + produced, 0, static_cast<std::size_t>(wanted) - produced);
+  }
+  SDL_PutAudioStreamData(stream, buffer, wanted);
+}
+#endif
+
+void SoftwareBackend::close() noexcept {
+#if defined(ACEPS_HAS_SDL3)
+  if (stream_ != nullptr) SDL_DestroyAudioStream(static_cast<SDL_AudioStream*>(stream_));
+  if (sdlInited_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
+#endif
+  stream_ = nullptr;
+  port_ = nullptr;
+  sdlInited_ = false;
+}
+
+[[maybe_unused]] void SoftwareBackend::pause(const bool paused) noexcept {
+#if defined(ACEPS_HAS_SDL3)
+  if (stream_ != nullptr) {
+    if (paused) SDL_PauseAudioStreamDevice(static_cast<SDL_AudioStream*>(stream_));
+    else SDL_ResumeAudioStreamDevice(static_cast<SDL_AudioStream*>(stream_));
+  }
+#else
+  (void)paused;
+#endif
+}
+
 AudioSystem::AudioSystem() = default;
 AudioSystem::~AudioSystem() { shutdown(); }
 
@@ -51,8 +148,9 @@ void AudioSystem::shutdown() noexcept {
   initialized_ = false;
 }
 
-bool AudioSystem::open(AudioFormat format, std::uint32_t sampleRate, std::uint32_t channels,
-                       std::uint32_t framesPerBlock, std::int32_t& handle, std::string& error) {
+bool AudioSystem::open(const AudioFormat format, const std::uint32_t sampleRate,
+                       const std::uint32_t channels, const std::uint32_t framesPerBlock,
+                       std::int32_t& handle, std::string& error) {
   if (!initialized_) { error = "audio system is not initialized"; return false; }
   if ((sampleRate != 48000 && sampleRate != 44100) || channels == 0 || channels > 2 || framesPerBlock == 0) {
     error = "invalid audio port format"; return false;
@@ -69,18 +167,19 @@ bool AudioSystem::open(AudioFormat format, std::uint32_t sampleRate, std::uint32
   port->channels = channels;
   if (format == AudioFormat::S16Mono || format == AudioFormat::S16Stereo) port->s16 = std::make_unique<AudioRingBuffer<std::int16_t>>(channels);
   else port->floats = std::make_unique<AudioRingBuffer<float>>(channels);
-  if (!port->backend.open(format, sampleRate, channels, error)) return false;
+  if (!port->backend.open(format, sampleRate, channels, port.get(), error)) return false;
   *found = std::move(port);
   handle = index + 1;
-  error.clear(); return true;
+  error.clear();
+  return true;
 }
 
-AudioSystem::Port* AudioSystem::findPort(std::int32_t handle) const noexcept {
+AudioSystem::Port* AudioSystem::findPort(const std::int32_t handle) const noexcept {
   if (handle < 1 || handle > static_cast<std::int32_t>(ports_.size())) return nullptr;
   return ports_[static_cast<std::size_t>(handle - 1)].get();
 }
 
-std::int32_t AudioSystem::output(std::int32_t handle, const void* pcm) {
+std::int32_t AudioSystem::output(const std::int32_t handle, const void* pcm) {
   std::unique_lock lock(mutex_);
   auto* port = findPort(handle);
   if (port == nullptr) return SCE_AUDIO_OUT_ERROR_NOT_OPENED;
@@ -106,24 +205,28 @@ std::int32_t AudioSystem::output(std::int32_t handle, const void* pcm) {
     for (std::size_t i = 0; i < scaled.size(); ++i) scaled[i] = input[i] * static_cast<float>(port->volume[i % port->channels]) / 32768.0F;
     port->floats->push(scaled.data(), frames);
   }
-  lock.unlock(); spaceAvailable_.notify_all(); return 0;
+  lock.unlock();
+  spaceAvailable_.notify_all();
+  return 0;
 }
 
-std::int32_t AudioSystem::outputs(const void* portOutputs, std::size_t count) {
+std::int32_t AudioSystem::outputs(const void* portOutputs, const std::size_t count) {
   if (portOutputs == nullptr || count > ports_.size()) return SCE_AUDIO_OUT_ERROR_INVALID_PORT;
   const auto* outputs = static_cast<const SceAudioOutPortOutput*>(portOutputs);
   for (std::size_t i = 0; i < count; ++i) { const auto result = output(outputs[i].handle, outputs[i].ptr); if (result != 0) return result; }
   return 0;
 }
 
-std::int32_t AudioSystem::close(std::int32_t handle) {
+std::int32_t AudioSystem::close(const std::int32_t handle) {
   std::scoped_lock lock(mutex_);
   auto* port = findPort(handle);
   if (port == nullptr) return SCE_AUDIO_OUT_ERROR_NOT_OPENED;
-  port->backend.close(); ports_[static_cast<std::size_t>(handle - 1)].reset(); return 0;
+  port->backend.close();
+  ports_[static_cast<std::size_t>(handle - 1)].reset();
+  return 0;
 }
 
-std::int32_t AudioSystem::setVolume(std::int32_t handle, std::uint32_t flags, const std::int32_t* volumes) {
+std::int32_t AudioSystem::setVolume(const std::int32_t handle, const std::uint32_t flags, const std::int32_t* volumes) {
   std::scoped_lock lock(mutex_);
   auto* port = findPort(handle);
   if (port == nullptr) return SCE_AUDIO_OUT_ERROR_NOT_OPENED;
@@ -135,14 +238,15 @@ std::int32_t AudioSystem::setVolume(std::int32_t handle, std::uint32_t flags, co
   return 0;
 }
 
-std::int32_t AudioSystem::getPortState(std::int32_t handle, void* state) const {
+std::int32_t AudioSystem::getPortState(const std::int32_t handle, void* state) const {
   std::scoped_lock lock(mutex_);
   auto* port = findPort(handle);
   if (port == nullptr) return SCE_AUDIO_OUT_ERROR_NOT_OPENED;
   if (state == nullptr) return SCE_AUDIO_OUT_ERROR_INVALID_PORT;
   auto* result = static_cast<SceAudioOutPortState*>(state);
   result->output = 1; result->channel = static_cast<std::int32_t>(port->channels);
-  result->volume[0] = port->volume[0]; result->volume[1] = port->volume[1]; result->rerouteCounter = 0; return 0;
+  result->volume[0] = port->volume[0]; result->volume[1] = port->volume[1]; result->rerouteCounter = 0;
+  return 0;
 }
 
 std::int32_t AudioSystem::getSystemState(void* state) const {
@@ -151,7 +255,10 @@ std::int32_t AudioSystem::getSystemState(void* state) const {
 }
 
 std::uint64_t AudioSystem::audioUnderruns() const noexcept {
-  std::scoped_lock lock(mutex_); std::uint64_t total = 0; for (const auto& port : ports_) if (port) total += port->underruns(); return total;
+  std::scoped_lock lock(mutex_);
+  std::uint64_t total = 0;
+  for (const auto& port : ports_) if (port) total += port->underruns();
+  return total;
 }
 
 } // namespace aceps::audio
