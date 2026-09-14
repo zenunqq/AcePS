@@ -6,6 +6,7 @@
 
 #include "aceps/common/Logging.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
+#include "aceps/gpu/CommandProcessor.h"
 #include "aceps/loader/ElfMapper.h"
 #include "aceps/loader/SelfLoader.h"
 #include "aceps/memory/VirtualMemoryManager.h"
@@ -51,7 +52,8 @@ bool readImage(const std::filesystem::path& path,
 
 } // namespace
 
-bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error) const {
+bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error,
+                       const gpu::NativeWindowHandle* windowHandle) const {
   error.clear();
   logStep("starting boot for " + elfPath.string());
 
@@ -74,7 +76,8 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error)
   filesystem::VirtualFileSystem fileSystem(applicationRoot, applicationRoot / "savedata");
   logStep("created virtual filesystem with /app0 at " + applicationRoot.string());
 
-  os::KernelSubsystem kernel(memory, fileSystem);
+  gpu::CommandProcessor commandProcessor;
+  os::KernelSubsystem kernel(memory, fileSystem, &commandProcessor);
   logStep("initializing kernel subsystem");
   const ServiceContext context{"boot"};
   if (!kernel.initialize(context, error)) {
@@ -101,6 +104,15 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error)
   }
   logStep("mapped " + std::to_string(mapper.mappingCount()) + " ELF segments");
 
+  logStep("initializing Vulkan command processor");
+  if (!commandProcessor.initialize(windowHandle, 1280, 720, error)) {
+    std::string uninstallError;
+    (void)patcher.uninstall(uninstallError);
+    kernel.shutdown();
+    return fail(error, "Vulkan initialization failed: " + error);
+  }
+  logStep("Vulkan command processor initialized");
+
   bool entryReturned = false;
   try {
     logStep("transferring control to ELF entry point 0x" + [&] {
@@ -114,6 +126,7 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error)
     if (entryPoint == nullptr) {
       std::string uninstallError;
       (void)patcher.uninstall(uninstallError);
+      commandProcessor.shutdown();
       kernel.shutdown();
       return fail(error, "ELF entry point is null");
     }
@@ -132,6 +145,7 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error)
   logStep("uninstalling syscall patcher");
   std::string uninstallError;
   const bool uninstalled = patcher.uninstall(uninstallError);
+  commandProcessor.shutdown();
   kernel.shutdown();
   if (!uninstalled) {
     if (error.empty()) error = "syscall patcher uninstall failed: " + uninstallError;

@@ -3,6 +3,7 @@
  * It owns all boot-scoped services and guarantees syscall handler cleanup.
  */
 #pragma once
+#include "aceps/gpu/CommandProcessor.h"
 
 #include <filesystem>
 #include <string>
@@ -11,7 +12,8 @@ namespace aceps::core {
 
 class BootSequence final {
 public:
-  [[nodiscard]] bool run(const std::filesystem::path& elfPath, std::string& error) const;
+  [[nodiscard]] bool run(const std::filesystem::path& elfPath, std::string& error,
+                         const gpu::NativeWindowHandle* windowHandle = nullptr) const;
 };
 
 } // namespace aceps::core

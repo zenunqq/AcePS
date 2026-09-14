@@ -58,6 +58,7 @@ constexpr SyscallNumber kDlsym = 591;
 constexpr SyscallNumber kLoadStartModule = 594;
 constexpr SyscallNumber kStopUnloadModule = 595;
 constexpr SyscallNumber kInstallHandler = 596;
+constexpr SyscallNumber kGnmSubmitCommandBuffers = 1000;
 constexpr SyscallNumber kIsNeoMode = 615;
 constexpr std::size_t kMaxPrintfLength = 4096;
 
@@ -186,8 +187,10 @@ SyscallResult handlePrintf(const std::vector<std::uint64_t>& arguments) noexcept
 } // namespace
 
 KernelSubsystem::KernelSubsystem(memory::VirtualMemoryManager& memory,
-                                 filesystem::VirtualFileSystem& fileSystem) noexcept
-    : memory_(memory), fileSystem_(fileSystem), moduleLoader_(memory, fileSystem) {}
+                                 filesystem::VirtualFileSystem& fileSystem,
+                                 gpu::CommandProcessor* commandProcessor) noexcept
+    : memory_(memory), fileSystem_(fileSystem), commandProcessor_(commandProcessor),
+      moduleLoader_(memory, fileSystem) {}
 
 KernelSubsystem::~KernelSubsystem() { shutdown(); }
 
@@ -198,7 +201,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     error.clear();
     return true;
   }
-  if (registry_.size() == 29) {
+  if (registry_.size() == 30) {
     initialized_ = true;
     error.clear();
     return true;
@@ -415,6 +418,22 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
         }
         aceps::logging::info("PKG content ID: " + package.contentId());
         if (!package.info().title.empty()) aceps::logging::info("PKG title: " + package.info().title);
+        return static_cast<SyscallResult>(0);
+      }) ||
+      !registerHandler(kGnmSubmitCommandBuffers, [this](const auto& arguments) {
+        if (commandProcessor_ == nullptr || arguments.size() < 2) return static_cast<SyscallResult>(-ENODEV);
+        if (arguments[1] > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
+          return static_cast<SyscallResult>(-EINVAL);
+        }
+        const auto* words = reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(arguments[0]));
+        const auto count = static_cast<std::size_t>(arguments[1]);
+        if (words == nullptr || count == 0) return static_cast<SyscallResult>(-EINVAL);
+        std::string error;
+        if (!commandProcessor_->submit(std::span<const std::uint32_t>(words, count), error) ||
+            !commandProcessor_->endFrame(error)) {
+          aceps::logging::error("sceGnmSubmitCommandBuffers failed: " + error);
+          return static_cast<SyscallResult>(-EIO);
+        }
         return static_cast<SyscallResult>(0);
       })) {
     return false;

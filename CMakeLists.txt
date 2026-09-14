@@ -17,6 +17,7 @@ include(CTest)
 include(cmake/CompilerWarnings.cmake)
 
 find_package(spdlog CONFIG QUIET)
+find_package(Vulkan REQUIRED)
 if(NOT spdlog_FOUND)
   message(WARNING "spdlog was not found; configure with vcpkg or install spdlog to build AcePS.")
 endif()
@@ -55,6 +56,7 @@ target_include_directories(aceps_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+target_link_libraries(aceps_core PUBLIC Vulkan::Vulkan)
 target_compile_definitions(aceps_core PUBLIC ACEPS_VERSION=\"${PROJECT_VERSION}\")
 if(spdlog_FOUND)
   target_link_libraries(aceps_core PUBLIC spdlog::spdlog)

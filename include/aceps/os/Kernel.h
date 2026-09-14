@@ -7,6 +7,7 @@
 
 #include "aceps/core/Subsystem.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
+#include "aceps/gpu/CommandProcessor.h"
 #include "aceps/memory/VirtualMemoryManager.h"
 #include "aceps/loader/ModuleLoader.h"
 #include "aceps/os/SyscallRegistry.h"
@@ -24,7 +25,8 @@ namespace aceps::os {
 class KernelSubsystem final : public core::ISubsystem {
 public:
   KernelSubsystem(memory::VirtualMemoryManager& memory,
-                  filesystem::VirtualFileSystem& fileSystem) noexcept;
+                  filesystem::VirtualFileSystem& fileSystem,
+                  gpu::CommandProcessor* commandProcessor = nullptr) noexcept;
   ~KernelSubsystem() override;
 
   [[nodiscard]] std::string_view name() const noexcept override;
@@ -45,6 +47,7 @@ private:
 
   memory::VirtualMemoryManager& memory_;
   filesystem::VirtualFileSystem& fileSystem_;
+  gpu::CommandProcessor* commandProcessor_{nullptr};
   loader::ModuleLoader moduleLoader_;
   SyscallRegistry registry_;
   std::unordered_map<std::uint64_t, ThreadEntry> threads_;

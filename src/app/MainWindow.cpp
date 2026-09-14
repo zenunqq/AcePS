@@ -28,6 +28,7 @@
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <QWidget>
 
 namespace aceps::app {
@@ -304,8 +305,10 @@ void MainWindow::bootSelectedGame() {
   statusLabel_->setText(tr("Booting %1...").arg(QString::fromStdString(game.displayName)));
   appendLog(tr("Starting BootSequence..."));
   core::BootSequence bootSequence;
+  gpu::NativeWindowHandle nativeWindow;
+  nativeWindow.window = windowHandle() == nullptr ? 0 : windowHandle()->winId();
   std::string error;
-  const bool succeeded = bootSequence.run(elfPath, error);
+  const bool succeeded = bootSequence.run(elfPath, error, &nativeWindow);
   if (succeeded) {
     appendLog(tr("BootSequence completed successfully."));
     statusLabel_->setText(tr("Boot completed: %1").arg(QString::fromStdString(game.displayName)));
