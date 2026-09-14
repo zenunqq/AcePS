@@ -1,40 +1,21 @@
 /*
- * SyscallPatcher.h defines the platform boundary that redirects x86-64 guest
- * syscall instructions into the Orbis syscall registry.
- *
- * Only one patcher may be installed per process. Signal and exception handlers
- * are process-global, so callers must keep the registry alive until uninstall.
+ * SyscallPatcher.h identifies x86-64 SYSCALL instructions in a known guest
+ * executable mapping. GuestTrapDispatcher owns actual instruction patching
+ * and process-global trap-handler lifecycle.
  */
 #pragma once
 
-#include "aceps/os/SyscallRegistry.h"
-
-#include <atomic>
-#include <memory>
-#include <mutex>
-#include <string>
+#include <cstddef>
+#include <vector>
 
 namespace aceps::os {
 
-struct SyscallPatcherState;
-
 class SyscallPatcher final {
 public:
-  explicit SyscallPatcher(SyscallRegistry& registry) noexcept;
-  ~SyscallPatcher();
-
-  SyscallPatcher(const SyscallPatcher&) = delete;
-  SyscallPatcher& operator=(const SyscallPatcher&) = delete;
-
-  [[nodiscard]] bool install(std::string& error);
-  [[nodiscard]] bool uninstall(std::string& error);
-  [[nodiscard]] bool installed() const noexcept;
-
-private:
-  SyscallRegistry& registry_;
-  std::unique_ptr<SyscallPatcherState> state_;
-  mutable std::mutex mutex_;
-  std::atomic<bool> installed_{false};
+  // Returns addresses of complete 0F 05 instructions within the caller's
+  // trusted executable mapping. The scanner performs no writes and never
+  // dereferences memory outside [codeBase, codeBase + codeSize).
+  [[nodiscard]] static std::vector<void*> scan(void* codeBase, std::size_t codeSize);
 };
 
 } // namespace aceps::os

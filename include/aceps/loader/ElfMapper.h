@@ -21,6 +21,7 @@ struct ElfMapping final {
   void* hostAddress{nullptr};
   std::uint64_t guestAddress{0};
   std::size_t size{0};
+  bool executable{false};
 };
 
 class ElfMapper final {
@@ -38,6 +39,8 @@ public:
                          memory::VirtualMemoryManager& memory,
                          std::string& error);
 
+  // Returns the host address corresponding to the validated executable ELF
+  // entry point after successful mapping.
   [[nodiscard]] std::uint64_t entryPoint() const noexcept;
   [[nodiscard]] std::size_t mappingCount() const noexcept;
   [[nodiscard]] std::vector<ElfMapping> mappings() const;

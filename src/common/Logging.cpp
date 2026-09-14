@@ -47,6 +47,9 @@ void write(Level level, std::string_view message) {
   std::scoped_lock lock(loggerMutex);
 #ifdef ACEPS_NO_SPDLOG
   switch (level) {
+  case Level::Debug:
+    std::clog << "[DEBUG] ";
+    break;
   case Level::Info:
     std::clog << "[INFO] ";
     break;
@@ -61,6 +64,9 @@ void write(Level level, std::string_view message) {
 #else
   ensureLogger();
   switch (level) {
+  case Level::Debug:
+    spdlog::debug("{}", message);
+    break;
   case Level::Info:
     spdlog::info("{}", message);
     break;
@@ -74,6 +80,7 @@ void write(Level level, std::string_view message) {
 #endif
 }
 
+void debug(std::string_view message) { write(Level::Debug, message); }
 void info(std::string_view message) { write(Level::Info, message); }
 void warn(std::string_view message) { write(Level::Warn, message); }
 void error(std::string_view message) { write(Level::Error, message); }

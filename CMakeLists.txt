@@ -34,6 +34,7 @@ add_library(aceps_core STATIC
   src/core/WorkScheduler.cpp
   src/memory/VirtualMemoryManager.cpp
   src/os/Kernel.cpp
+  src/os/GuestTrapDispatcher.cpp
   src/os/SyscallPatcher.cpp
   src/os/SyscallRegistry.cpp
   src/loader/ElfMapper.cpp
@@ -51,6 +52,12 @@ add_library(aceps_core STATIC
   src/audio/SceAudioOut.cpp
   src/input/InputSystem.cpp
 )
+
+if(WIN32)
+  target_sources(aceps_core PRIVATE src/os/platform/TrapDispatcherWin32.cpp)
+else()
+  target_sources(aceps_core PRIVATE src/os/platform/TrapDispatcherLinux.cpp)
+endif()
 
 add_library(AcePS::Core ALIAS aceps_core)
 target_include_directories(aceps_core PUBLIC

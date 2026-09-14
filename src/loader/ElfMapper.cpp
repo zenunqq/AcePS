@@ -82,13 +82,25 @@ bool ElfMapper::map(const std::span<const std::uint8_t> image,
       return false;
     }
 
+    const auto rawFlags = static_cast<std::uint32_t>(segment.flags);
+    const bool executable = (rawFlags & static_cast<std::uint32_t>(SegmentFlags::Execute)) != 0U;
     mappings_.push_back(OwnedMapping{
-        ElfMapping{address, segment.virtualAddress, allocationSize},
+        ElfMapping{address, segment.virtualAddress, allocationSize, executable},
         allocationSize,
         &memory});
+
+    if (executable && plan.entryPoint >= segment.virtualAddress &&
+        plan.entryPoint - segment.virtualAddress < segment.memorySize) {
+      entryPoint_ = reinterpret_cast<std::uint64_t>(destination +
+          static_cast<std::size_t>(plan.entryPoint - segment.virtualAddress));
+    }
   }
 
-  entryPoint_ = plan.entryPoint;
+  if (entryPoint_ == 0) {
+    error = "ELF entry point is not inside an executable mapped segment";
+    (void)releaseMappings(error);
+    return false;
+  }
   error.clear();
   return true;
 }

@@ -17,6 +17,8 @@
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/gpu/Pm4Parser.h"
 #include "aceps/memory/VirtualMemoryManager.h"
+#include "aceps/os/GuestTrapDispatcher.h"
+#include "aceps/os/SyscallPatcher.h"
 #include "aceps/os/SyscallRegistry.h"
 
 #include <cstdlib>
@@ -29,6 +31,7 @@
 #include <iterator>
 #include <string>
 #include <vector>
+#include <cstring>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -107,6 +110,61 @@ int main() {
   require(views.front().payload.front() == 0xDEADBEEFU, "PM4 view payload must be readable");
 
   require(syscalls.dispatchCount() == 2, "syscall statistics must count known and unknown dispatches");
+
+  aceps::os::GuestRegisterFrame frame{};
+  frame.rax = 42;
+  frame.rdi = 1;
+  frame.rsi = 2;
+  frame.rdx = 3;
+  frame.r10 = 4;
+  frame.r8 = 5;
+  frame.r9 = 6;
+  aceps::os::GuestTrapDispatcher::dispatchFrame(frame, syscalls);
+  require(static_cast<std::int64_t>(frame.rax) == 6, "register-frame dispatch must call the syscall registry");
+  require(syscalls.dispatchCount() == 3, "register-frame dispatch must update registry metrics");
+
+  frame.rax = 0x1'0000'0000ULL;
+  aceps::os::GuestTrapDispatcher::dispatchFrame(frame, syscalls);
+  require(static_cast<std::uint32_t>(frame.rax) == 0x80020016U,
+          "unrecognized guest syscall must return the Orbis ENOSYS error");
+
+  std::array<std::uint8_t, 7> syscallBytes{0x90U, 0x0FU, 0x05U, 0x0FU, 0x05U, 0x90U, 0x05U};
+  const auto syscallSites = aceps::os::SyscallPatcher::scan(syscallBytes.data(), syscallBytes.size());
+  require(syscallSites.size() == 2, "syscall scanner must identify each complete SYSCALL instruction");
+  require(syscallSites[0] == syscallBytes.data() + 1 && syscallSites[1] == syscallBytes.data() + 3,
+          "syscall scanner must return instruction addresses");
+
+#if defined(__linux__) && defined(__x86_64__)
+  aceps::memory::VirtualMemoryManager trapMemory;
+  void* trapCode = trapMemory.allocate(trapMemory.pageSize(), aceps::memory::Protection::ReadWriteExecute, error);
+  require(trapCode != nullptr, "trap integration code allocation must succeed");
+  const std::array<std::uint8_t, 37> trapProgram{
+      0x48U, 0xC7U, 0xC0U, 0x5AU, 0x00U, 0x00U, 0x00U, // mov rax, 90
+      0x48U, 0xC7U, 0xC7U, 0x01U, 0x00U, 0x00U, 0x00U, // mov rdi, 1
+      0x48U, 0xC7U, 0xC6U, 0x02U, 0x00U, 0x00U, 0x00U, // mov rsi, 2
+      0x48U, 0xC7U, 0xC2U, 0x03U, 0x00U, 0x00U, 0x00U, // mov rdx, 3
+      0x41U, 0xBAU, 0x04U, 0x00U, 0x00U, 0x00U,       // mov r10d, 4
+      0x0FU, 0x05U,                                     // syscall
+      0xC3U};                                           // ret
+  static_assert(trapProgram.size() == 37U);
+  std::memcpy(trapCode, trapProgram.data(), trapProgram.size());
+  require(syscalls.registerHandler(90, [](const std::vector<std::uint64_t>& arguments) {
+            return static_cast<std::int64_t>(arguments[0] + arguments[1] + arguments[2] + arguments[3]);
+          }, error), "trap integration syscall handler must register");
+  aceps::os::GuestTrapDispatcher dispatcher;
+  require(dispatcher.install(syscalls, error), "guest trap dispatcher must install on Linux/x86-64");
+  const auto trapSites = aceps::os::SyscallPatcher::scan(trapCode, trapProgram.size());
+  require(trapSites.size() == 1, "guest trap integration program must contain one SYSCALL instruction");
+  require(dispatcher.patchSite(trapSites.front(), error), "guest trap dispatcher must patch the SYSCALL instruction");
+  using TrapEntryPoint = std::int64_t (*)();
+  const auto trapEntry = reinterpret_cast<TrapEntryPoint>(trapCode);
+  require(trapEntry() == 10, "patched guest SYSCALL must dispatch and resume with the return value");
+  dispatcher.uninstall();
+  const auto* restoredTrapBytes = static_cast<const std::uint8_t*>(trapCode);
+  require(restoredTrapBytes[34] == 0x0FU && restoredTrapBytes[35] == 0x05U,
+          "dispatcher teardown must restore each patched SYSCALL instruction");
+  require(trapMemory.release(trapCode, trapMemory.pageSize(), error), "trap integration code must release");
+#endif
 
   aceps::core::Emulator emulator(defaults);
   require(emulator.state() == aceps::core::EmulatorState::Created, "emulator starts in Created");

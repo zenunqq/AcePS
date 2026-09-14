@@ -10,6 +10,7 @@
 #include "aceps/loader/ElfMapper.h"
 #include "aceps/loader/SelfLoader.h"
 #include "aceps/memory/VirtualMemoryManager.h"
+#include "aceps/os/GuestTrapDispatcher.h"
 #include "aceps/os/Kernel.h"
 #include "aceps/os/SyscallPatcher.h"
 
@@ -86,28 +87,40 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error,
   logStep("kernel subsystem initialized with " + std::to_string(kernel.registry().size()) +
           " syscall handlers");
 
-  os::SyscallPatcher patcher(kernel.registry());
-  logStep("installing syscall patcher");
-  if (!patcher.install(error)) {
+  os::GuestTrapDispatcher dispatcher;
+  logStep("installing guest trap dispatcher");
+  if (!dispatcher.install(kernel.registry(), error)) {
     kernel.shutdown();
-    return fail(error, "syscall patcher installation failed: " + error);
+    return fail(error, "guest trap dispatcher installation failed: " + error);
   }
-  logStep("syscall patcher installed");
+  logStep("guest trap dispatcher installed");
 
   loader::ElfMapper mapper;
   logStep("mapping ELF segments into host memory");
   if (!mapper.map(image, plan, memory, error)) {
-    std::string uninstallError;
-    (void)patcher.uninstall(uninstallError);
+    dispatcher.uninstall();
     kernel.shutdown();
     return fail(error, "ELF mapping failed: " + error);
   }
   logStep("mapped " + std::to_string(mapper.mappingCount()) + " ELF segments");
 
+  std::size_t patchedSyscalls = 0;
+  for (const auto& mapping : mapper.mappings()) {
+    if (!mapping.executable) continue;
+    for (void* site : os::SyscallPatcher::scan(mapping.hostAddress, mapping.size)) {
+      if (!dispatcher.patchSite(site, error)) {
+        dispatcher.uninstall();
+        kernel.shutdown();
+        return fail(error, "could not patch guest syscall instruction: " + error);
+      }
+      ++patchedSyscalls;
+    }
+  }
+  logStep("patched " + std::to_string(patchedSyscalls) + " guest syscall sites");
+
   logStep("initializing Vulkan command processor");
   if (!commandProcessor.initialize(windowHandle, 1280, 720, error)) {
-    std::string uninstallError;
-    (void)patcher.uninstall(uninstallError);
+    dispatcher.uninstall();
     kernel.shutdown();
     return fail(error, "Vulkan initialization failed: " + error);
   }
@@ -124,8 +137,7 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error,
     const auto entryPoint = reinterpret_cast<EntryPoint>(
         static_cast<std::uintptr_t>(mapper.entryPoint()));
     if (entryPoint == nullptr) {
-      std::string uninstallError;
-      (void)patcher.uninstall(uninstallError);
+      dispatcher.uninstall();
       commandProcessor.shutdown();
       kernel.shutdown();
       return fail(error, "ELF entry point is null");
@@ -142,17 +154,11 @@ bool BootSequence::run(const std::filesystem::path& elfPath, std::string& error,
     aceps::logging::error("[BootSequence] " + error);
   }
 
-  logStep("uninstalling syscall patcher");
-  std::string uninstallError;
-  const bool uninstalled = patcher.uninstall(uninstallError);
+  logStep("uninstalling guest trap dispatcher");
+  dispatcher.uninstall();
   commandProcessor.shutdown();
   kernel.shutdown();
-  if (!uninstalled) {
-    if (error.empty()) error = "syscall patcher uninstall failed: " + uninstallError;
-    aceps::logging::error("[BootSequence] syscall patcher uninstall failed: " + uninstallError);
-    return false;
-  }
-  logStep("syscall patcher uninstalled");
+  logStep("guest trap dispatcher uninstalled");
 
   if (!entryReturned) return false;
   error.clear();
