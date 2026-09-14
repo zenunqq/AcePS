@@ -5,6 +5,8 @@
 #pragma once
 
 #include "aceps/gpu/Pm4Parser.h"
+#include "aceps/gpu/ContextTracker.h"
+#include "aceps/gpu/PipelineCache.h"
 #include "aceps/shader/ShaderTranslator.h"
 
 #include <vulkan/vulkan.h>
@@ -75,6 +77,8 @@ private:
   [[nodiscard]] bool translateShaderModule(std::span<const std::uint32_t> bytecode,
                                            shader::ShaderType type,
                                            std::string& error);
+  [[nodiscard]] bool bindGraphicsPipeline(std::string& error);
+  [[nodiscard]] bool bindComputePipeline(std::string& error);
 
   mutable std::mutex mutex_;
   VkInstance instance_{VK_NULL_HANDLE};
@@ -104,6 +108,9 @@ private:
   RenderState state_{};
   std::unordered_map<std::uint32_t, std::uint32_t> contextRegisters_;
   std::unordered_map<std::size_t, VkShaderModule> shaderModules_;
+  ContextTracker contextTracker_{};
+  ShaderCache shaderCache_{};
+  PipelineCache pipelineCache_{};
 };
 
 } // namespace aceps::gpu

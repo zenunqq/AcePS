@@ -306,9 +306,14 @@ bool CommandProcessor::initialize(const NativeWindowHandle* windowHandle,
                                   std::uint32_t width, std::uint32_t height,
                                   std::string& error) {
   shutdown();
+  contextTracker_ = ContextTracker{};
   if (!createInstance(error) || !createSurface(windowHandle, error) || !selectPhysicalDevice(error) ||
       !createDevice(error) || !createSwapchain(width, height, error) || !createRenderPass(error) ||
       !createFramebuffers(error) || !createCommandResources(error)) {
+    shutdown();
+    return false;
+  }
+  if (!pipelineCache_.init(device_, error)) {
     shutdown();
     return false;
   }
@@ -432,6 +437,30 @@ bool CommandProcessor::translateShaderModule(std::span<const std::uint32_t> byte
   if (!checkResult(vkCreateShaderModule(device_, &createInfo, nullptr, &module),
                    "vkCreateShaderModule", error)) return false;
   shaderModules_.emplace(hash, module);
+  shaderCache_.set(type == shader::ShaderType::Vertex ? contextTracker_.vertexShaderAddr()
+                                                       : contextTracker_.pixelShaderAddr(), module);
+  return true;
+}
+
+bool CommandProcessor::bindGraphicsPipeline(std::string& error) {
+  if (!hasSurface_ || !renderPassActive_) return true;
+  const auto pipeline = pipelineCache_.getOrBuild(contextTracker_, renderPass_, shaderCache_, error);
+  if (pipeline == VK_NULL_HANDLE) return false;
+  vkCmdBindPipeline(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+  const auto& viewport = contextTracker_.viewport(0);
+  VkViewport vkViewport{viewport.x, viewport.y, viewport.width == 0.0F ? static_cast<float>(width_) : viewport.width,
+                        viewport.height == 0.0F ? static_cast<float>(height_) : viewport.height,
+                        viewport.minDepth, viewport.maxDepth};
+  VkRect2D scissor{{0, 0}, {width_, height_}};
+  vkCmdSetViewport(activeCommandBuffer_, 0, 1, &vkViewport);
+  vkCmdSetScissor(activeCommandBuffer_, 0, 1, &scissor);
+  return true;
+}
+
+bool CommandProcessor::bindComputePipeline(std::string& error) {
+  const auto pipeline = pipelineCache_.getOrBuildCompute(contextTracker_.computeShaderAddr(), shaderCache_, error);
+  if (pipeline == VK_NULL_HANDLE) return false;
+  vkCmdBindPipeline(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
   return true;
 }
 
@@ -462,6 +491,7 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
   case kItSetContextReg:
     for (std::size_t index = 0; index + 1 < packet.payload.size(); index += 2) {
       contextRegisters_[packet.payload[index]] = packet.payload[index + 1];
+      contextTracker_.setContextReg(packet.payload[index], packet.payload[index + 1]);
     }
     return true;
   case kItSetShReg:
@@ -469,8 +499,9 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
     // Guest-address-backed shader memory is resolved before submission.
     if (packet.payload.size() < 3) return true;
     contextRegisters_[packet.payload[0]] = packet.payload[1];
-    return translateShaderModule(packet.payload.subspan(2),
-                                  packet.payload[0] == 0x2C00U ? shader::ShaderType::Vertex
+    contextTracker_.setShReg(packet.payload[0], packet.payload[1]);
+  return translateShaderModule(packet.payload.subspan(2),
+                                  packet.payload[0] == 0x2C8U ? shader::ShaderType::Vertex
                                                                : shader::ShaderType::Fragment,
                                   error);
   case kItDrawIndex2:
@@ -478,19 +509,20 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
     if (hasSurface_ && !renderPassActive_) {
       if (!clearScreen(0.0F, 0.0F, 0.0F, error)) return false;
     }
-    if (hasSurface_) {
-      vkCmdSetViewport(activeCommandBuffer_, 0, 1, &state_.viewport);
-      vkCmdSetScissor(activeCommandBuffer_, 0, 1, &state_.scissor);
-    }
+    if (!bindGraphicsPipeline(error)) return false;
     vkCmdDrawIndexed(activeCommandBuffer_, packet.payload[0], packet.payload.size() > 1 ? packet.payload[1] : 1, 0, 0, 0);
+    contextTracker_.clearDirty();
     return true;
   case kItDrawIndexAuto:
     if (packet.payload.empty()) { error = "PM4 automatic draw packet is truncated"; return false; }
     if (hasSurface_ && !renderPassActive_ && !clearScreen(0.0F, 0.0F, 0.0F, error)) return false;
+    if (!bindGraphicsPipeline(error)) return false;
     vkCmdDraw(activeCommandBuffer_, packet.payload[0], packet.payload.size() > 1 ? packet.payload[1] : 1, 0, 0);
+    contextTracker_.clearDirty();
     return true;
   case kItDispatchDirect:
     if (packet.payload.size() < 3) { error = "PM4 dispatch packet is truncated"; return false; }
+    if (!bindComputePipeline(error)) return false;
     vkCmdDispatch(activeCommandBuffer_, packet.payload[0], packet.payload[1], packet.payload[2]);
     return true;
   default:
@@ -521,6 +553,7 @@ void CommandProcessor::destroySwapchainResources() noexcept {
 void CommandProcessor::shutdown() noexcept {
   std::scoped_lock lock(mutex_);
   if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+  pipelineCache_.destroy();
   destroySwapchainResources();
   for (const auto& [hash, module] : shaderModules_) {
     (void)hash;

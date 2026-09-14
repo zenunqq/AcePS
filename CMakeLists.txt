@@ -45,8 +45,12 @@ add_library(aceps_core STATIC
   src/filesystem/VirtualFileSystem.cpp
   src/filesystem/AsyncFileService.cpp
   src/gpu/CommandProcessor.cpp
-  src/gpu/Pm4Parser.cpp
+  src/gpu/ContextTracker.cpp
+  src/gpu/FramePresenter.cpp
   src/gpu/GpuQueue.cpp
+  src/gpu/PipelineCache.cpp
+  src/gpu/Pm4Parser.cpp
+  src/gpu/TextureCache.cpp
   src/shader/ShaderTranslator.cpp
   src/audio/AudioSystem.cpp
   src/audio/SceAudioOut.cpp

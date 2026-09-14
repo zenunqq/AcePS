@@ -16,6 +16,7 @@
 #include "aceps/common/Profiler.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/gpu/Pm4Parser.h"
+#include "aceps/gpu/ContextTracker.h"
 #include "aceps/memory/VirtualMemoryManager.h"
 #include "aceps/os/GuestTrapDispatcher.h"
 #include "aceps/os/SyscallPatcher.h"
@@ -110,6 +111,21 @@ int main() {
   require(views.front().payload.front() == 0xDEADBEEFU, "PM4 view payload must be readable");
 
   require(syscalls.dispatchCount() == 2, "syscall statistics must count known and unknown dispatches");
+
+  aceps::gpu::ContextTracker context;
+  context.setContextReg(0xA318U, 0x100U);
+  context.setContextReg(0xA319U, 7U);
+  context.setContextReg(0xA31BU, (640U << 16U) | 480U);
+  require(context.renderTarget(0).baseAddr == 0x10000U, "context tracker must decode color base address");
+  require(context.renderTarget(0).width == 641U && context.renderTarget(0).height == 481U,
+          "context tracker must decode color dimensions");
+  context.setShReg(0x2C8U, 0x1234U);
+  context.setShReg(0x2C9U, 0x5678U);
+  require(context.vertexShaderAddr() == 0x567800001234ULL,
+          "context tracker must decode vertex shader address");
+  require(context.dirty(), "context tracker must mark changed state dirty");
+  context.clearDirty();
+  require(!context.dirty(), "context tracker must clear dirty state");
 
   aceps::os::GuestRegisterFrame frame{};
   frame.rax = 42;
