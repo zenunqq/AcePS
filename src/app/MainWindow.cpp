@@ -29,6 +29,10 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWindow>
+
+#if defined(__linux__)
+#include <X11/Xlib.h>
+#endif
 #include <QWidget>
 
 namespace aceps::app {
@@ -307,8 +311,15 @@ void MainWindow::bootSelectedGame() {
   core::BootSequence bootSequence;
   gpu::NativeWindowHandle nativeWindow;
   nativeWindow.window = windowHandle() == nullptr ? 0 : windowHandle()->winId();
+#if defined(__linux__)
+  Display* display = XOpenDisplay(nullptr);
+  nativeWindow.display = display;
+#endif
   std::string error;
   const bool succeeded = bootSequence.run(elfPath, error, &nativeWindow);
+#if defined(__linux__)
+  if (display != nullptr) XCloseDisplay(display);
+#endif
   if (succeeded) {
     appendLog(tr("BootSequence completed successfully."));
     statusLabel_->setText(tr("Boot completed: %1").arg(QString::fromStdString(game.displayName)));

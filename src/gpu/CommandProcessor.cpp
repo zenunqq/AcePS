@@ -199,6 +199,7 @@ bool CommandProcessor::createSwapchain(std::uint32_t width, std::uint32_t height
     return candidate.format == VK_FORMAT_B8G8R8A8_SRGB;
   });
   const auto format = preferredFormat == formats.end() ? formats.front() : *preferredFormat;
+  swapchainFormat_ = format.format;
   const auto mode = std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end()
                         ? VK_PRESENT_MODE_MAILBOX_KHR
                         : VK_PRESENT_MODE_FIFO_KHR;
@@ -249,7 +250,7 @@ bool CommandProcessor::createSwapchain(std::uint32_t width, std::uint32_t height
 bool CommandProcessor::createRenderPass(std::string& error) {
   if (!hasSurface_) return true;
   VkAttachmentDescription attachment{};
-  attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
+  attachment.format = swapchainFormat_;
   attachment.samples = VK_SAMPLE_COUNT_1_BIT;
   attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
   attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;

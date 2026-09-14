@@ -92,6 +92,7 @@ private:
   std::uint32_t imageIndex_{0};
   std::uint32_t width_{0};
   std::uint32_t height_{0};
+  VkFormat swapchainFormat_{VK_FORMAT_B8G8R8A8_UNORM};
   bool hasSurface_{false};
   bool frameActive_{false};
   bool renderPassActive_{false};
