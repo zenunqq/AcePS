@@ -6,6 +6,7 @@
 #pragma once
 
 #include "aceps/core/Subsystem.h"
+#include "aceps/audio/AudioSystem.h"
 #include "aceps/filesystem/VirtualFileSystem.h"
 #include "aceps/gpu/CommandProcessor.h"
 #include "aceps/memory/VirtualMemoryManager.h"
@@ -49,6 +50,7 @@ private:
   filesystem::VirtualFileSystem& fileSystem_;
   gpu::CommandProcessor* commandProcessor_{nullptr};
   loader::ModuleLoader moduleLoader_;
+  audio::AudioSystem audio_;
   SyscallRegistry registry_;
   std::unordered_map<std::uint64_t, ThreadEntry> threads_;
   std::unordered_map<std::uint64_t, std::shared_ptr<std::mutex>> mutexes_;

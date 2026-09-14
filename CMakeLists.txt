@@ -48,6 +48,7 @@ add_library(aceps_core STATIC
   src/gpu/GpuQueue.cpp
   src/shader/ShaderTranslator.cpp
   src/audio/AudioSystem.cpp
+  src/audio/SceAudioOut.cpp
   src/input/InputSystem.cpp
 )
 

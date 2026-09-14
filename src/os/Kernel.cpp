@@ -5,6 +5,7 @@
 #include "aceps/os/Kernel.h"
 
 #include "aceps/common/Logging.h"
+#include "aceps/audio/SceAudioOut.h"
 #include "aceps/loader/PkgLoader.h"
 
 #include <cerrno>
@@ -201,7 +202,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     error.clear();
     return true;
   }
-  if (registry_.size() == 30) {
+  if (registry_.size() == 37) {
     initialized_ = true;
     error.clear();
     return true;
@@ -211,6 +212,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
     return registry_.registerHandler(number, std::move(handler), error);
   };
   if (!moduleLoader_.initializeStubs(error)) return false;
+  if (!audio_.initialize(error) || !audio::SceAudioOut::registerHandlers(audio_, registry_, error)) return false;
   if (!registerHandler(kExit, [](const auto& arguments) { return handleExit(arguments); }) ||
       !registerHandler(kMmap, [this](const auto& arguments) { return handleMmap(memory_, arguments); }) ||
       !registerHandler(kMunmap, [this](const auto& arguments) { return handleMunmap(memory_, arguments); }) ||
@@ -445,6 +447,7 @@ bool KernelSubsystem::initialize(const core::ServiceContext&, std::string& error
 }
 
 void KernelSubsystem::shutdown() noexcept {
+  audio_.shutdown();
   std::vector<std::thread> workers;
   {
     std::scoped_lock lock(threadTableMutex_);
