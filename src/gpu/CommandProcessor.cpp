@@ -639,7 +639,7 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
             writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descSet, 1, static_cast<std::uint32_t>(index), 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &infos[index], nullptr, nullptr};
           }
           vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-          vkCmdBindDescriptorSets(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, extra->descriptorPipelineLayout, 0, 1, &descSet, 0, nullptr);
+          vkCmdBindDescriptorSets(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, extra->descriptorPipelineLayout, 1, 1, &descSet, 0, nullptr);
         }
       }
     }
@@ -676,7 +676,7 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
             writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descSet, 1, static_cast<std::uint32_t>(index), 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &infos[index], nullptr, nullptr};
           }
           vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-          vkCmdBindDescriptorSets(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, extra->descriptorPipelineLayout, 0, 1, &descSet, 0, nullptr);
+          vkCmdBindDescriptorSets(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, extra->descriptorPipelineLayout, 1, 1, &descSet, 0, nullptr);
         }
       }
     }
