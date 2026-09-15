@@ -49,6 +49,10 @@ bool hasLayer(const std::vector<VkLayerProperties>& layers, const char* name) {
 struct CommandExtras final {
   FramePresenter presenter;
   TextureCache textures;
+  VkDescriptorPool descriptorPool{VK_NULL_HANDLE};
+  VkDescriptorSetLayout descSetLayout{VK_NULL_HANDLE};
+  VkSampler defaultSampler{VK_NULL_HANDLE};
+  VkPipelineLayout descriptorPipelineLayout{VK_NULL_HANDLE};
   bool presenterActive{false};
 };
 
@@ -342,6 +346,54 @@ bool CommandProcessor::initialize(const NativeWindowHandle* windowHandle,
     shutdown();
     return false;
   }
+  VkDescriptorSetLayoutBinding texBinding{};
+  texBinding.binding = 1;
+  texBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  texBinding.descriptorCount = 16;
+  texBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  layoutInfo.bindingCount = 1;
+  layoutInfo.pBindings = &texBinding;
+  if (!checkResult(vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &commandExtra->descSetLayout),
+                   "vkCreateDescriptorSetLayout", error)) {
+    shutdown();
+    return false;
+  }
+  VkPipelineLayoutCreateInfo descriptorPipelineInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  descriptorPipelineInfo.setLayoutCount = 1;
+  descriptorPipelineInfo.pSetLayouts = &commandExtra->descSetLayout;
+  if (!checkResult(vkCreatePipelineLayout(device_, &descriptorPipelineInfo, nullptr,
+                                          &commandExtra->descriptorPipelineLayout),
+                   "vkCreatePipelineLayout", error)) {
+    shutdown();
+    return false;
+  }
+  VkDescriptorPoolSize poolSize{};
+  poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  poolSize.descriptorCount = 16U * 8U;
+  VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+  poolInfo.maxSets = 8;
+  poolInfo.poolSizeCount = 1;
+  poolInfo.pPoolSizes = &poolSize;
+  if (!checkResult(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &commandExtra->descriptorPool),
+                   "descriptor pool creation", error)) {
+    shutdown();
+    return false;
+  }
+  VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+  samplerInfo.magFilter = VK_FILTER_LINEAR;
+  samplerInfo.minFilter = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+  if (!checkResult(vkCreateSampler(device_, &samplerInfo, nullptr, &commandExtra->defaultSampler),
+                   "default sampler creation", error)) {
+    shutdown();
+    return false;
+  }
   if (hasSurface_) {
     std::string presenterError;
     if (!commandExtra->presenter.init(instance_, physicalDevice_, device_, surface_, width, height,
@@ -377,15 +429,6 @@ bool CommandProcessor::beginFrame(std::string& error) {
     error.clear();
     return true;
   }
-  if (hasSurface_) {
-    const auto result = vkAcquireNextImageKHR(device_, swapchain_, std::numeric_limits<std::uint64_t>::max(), VK_NULL_HANDLE, VK_NULL_HANDLE, &imageIndex_);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-      if (!recreateSwapchain(error)) return false;
-      const auto retry = vkAcquireNextImageKHR(device_, swapchain_, std::numeric_limits<std::uint64_t>::max(), VK_NULL_HANDLE, VK_NULL_HANDLE, &imageIndex_);
-      if (!checkResult(retry, "vkAcquireNextImageKHR", error)) return false;
-    }
-    if (!checkResult(result, "vkAcquireNextImageKHR", error)) return false;
-  }
   activeCommandBuffer_ = commandBuffers_[hasSurface_ ? imageIndex_ : 0];
   VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   if (!checkResult(vkBeginCommandBuffer(activeCommandBuffer_, &begin), "vkBeginCommandBuffer", error)) return false;
@@ -409,21 +452,6 @@ bool CommandProcessor::endFrame(std::string& error) {
     return true;
   }
   if (!checkResult(vkEndCommandBuffer(activeCommandBuffer_), "vkEndCommandBuffer", error)) return false;
-  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &activeCommandBuffer_;
-  if (!checkResult(vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit", error)) return false;
-  if (hasSurface_) {
-    VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    present.swapchainCount = 1;
-    present.pSwapchains = &swapchain_;
-    present.pImageIndices = &imageIndex_;
-    const auto result = vkQueuePresentKHR(presentQueue_, &present);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-      std::string ignored;
-      (void)recreateSwapchain(ignored);
-    } else if (!checkResult(result, "vkQueuePresentKHR", error)) return false;
-  }
   frameActive_ = false;
   error.clear();
   return true;
@@ -584,34 +612,74 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
     if (hasSurface_ && !renderPassActive_) {
       if (!clearScreen(0.0F, 0.0F, 0.0F, error)) return false;
     }
-    if (auto* commandExtra = commandExtras(this); commandExtra != nullptr) {
-      for (std::size_t texture = 0; texture < 16; ++texture) {
-        std::uint32_t descriptor[8]{};
-        for (std::size_t word = 0; word < 8; ++word) {
-          const auto found = contextRegisters_.find(static_cast<std::uint32_t>(texture * 8U + word));
-          if (found != contextRegisters_.end()) descriptor[word] = found->second;
+    if (!bindGraphicsPipeline(error)) return false;
+    if (auto* extra = commandExtras(this); extra != nullptr) {
+      std::vector<VkImageView> boundViews;
+      boundViews.reserve(16);
+      for (int texSlot = 0; texSlot < 16; ++texSlot) {
+        std::uint32_t tsharp[8]{};
+        for (int word = 0; word < 8; ++word) { const auto found = contextRegisters_.find(static_cast<std::uint32_t>(texSlot * 8 + word)); if (found != contextRegisters_.end()) tsharp[word] = found->second; }
+        if (tsharp[0] == 0U) continue;
+        std::string texErr;
+        const auto view = extra->textures.getOrUpload(tsharp, activeCommandBuffer_, texErr);
+        if (view != VK_NULL_HANDLE) boundViews.push_back(view);
+      }
+      if (!boundViews.empty() && extra->descriptorPool != VK_NULL_HANDLE && extra->descSetLayout != VK_NULL_HANDLE && extra->defaultSampler != VK_NULL_HANDLE) {
+        vkResetDescriptorPool(device_, extra->descriptorPool, 0);
+        VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocInfo.descriptorPool = extra->descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &extra->descSetLayout;
+        VkDescriptorSet descSet = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(device_, &allocInfo, &descSet) == VK_SUCCESS) {
+          std::vector<VkDescriptorImageInfo> infos(boundViews.size());
+          std::vector<VkWriteDescriptorSet> writes(boundViews.size());
+          for (std::size_t index = 0; index < boundViews.size(); ++index) {
+            infos[index] = {extra->defaultSampler, boundViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descSet, 1, static_cast<std::uint32_t>(index), 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &infos[index], nullptr, nullptr};
+          }
+          vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+          vkCmdBindDescriptorSets(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, extra->descriptorPipelineLayout, 0, 1, &descSet, 0, nullptr);
         }
-        if (descriptor[0] != 0U) { std::string textureError; (void)commandExtra->textures.getOrUpload(descriptor, activeCommandBuffer_, textureError); }
       }
     }
-    if (!bindGraphicsPipeline(error)) return false;
     vkCmdDrawIndexed(activeCommandBuffer_, packet.payload[0], packet.payload.size() > 1 ? packet.payload[1] : 1, 0, 0, 0);
     contextTracker_.clearDirty();
     return true;
   case kItDrawIndexAuto:
     if (packet.payload.empty()) { error = "PM4 automatic draw packet is truncated"; return false; }
     if (hasSurface_ && !renderPassActive_ && !clearScreen(0.0F, 0.0F, 0.0F, error)) return false;
-    if (auto* commandExtra = commandExtras(this); commandExtra != nullptr) {
-      for (std::size_t texture = 0; texture < 16; ++texture) {
-        std::uint32_t descriptor[8]{};
-        for (std::size_t word = 0; word < 8; ++word) {
-          const auto found = contextRegisters_.find(static_cast<std::uint32_t>(texture * 8U + word));
-          if (found != contextRegisters_.end()) descriptor[word] = found->second;
+    if (!bindGraphicsPipeline(error)) return false;
+    if (auto* extra = commandExtras(this); extra != nullptr) {
+      std::vector<VkImageView> boundViews;
+      boundViews.reserve(16);
+      for (int texSlot = 0; texSlot < 16; ++texSlot) {
+        std::uint32_t tsharp[8]{};
+        for (int word = 0; word < 8; ++word) { const auto found = contextRegisters_.find(static_cast<std::uint32_t>(texSlot * 8 + word)); if (found != contextRegisters_.end()) tsharp[word] = found->second; }
+        if (tsharp[0] == 0U) continue;
+        std::string texErr;
+        const auto view = extra->textures.getOrUpload(tsharp, activeCommandBuffer_, texErr);
+        if (view != VK_NULL_HANDLE) boundViews.push_back(view);
+      }
+      if (!boundViews.empty() && extra->descriptorPool != VK_NULL_HANDLE && extra->descSetLayout != VK_NULL_HANDLE && extra->defaultSampler != VK_NULL_HANDLE) {
+        vkResetDescriptorPool(device_, extra->descriptorPool, 0);
+        VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocInfo.descriptorPool = extra->descriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &extra->descSetLayout;
+        VkDescriptorSet descSet = VK_NULL_HANDLE;
+        if (vkAllocateDescriptorSets(device_, &allocInfo, &descSet) == VK_SUCCESS) {
+          std::vector<VkDescriptorImageInfo> infos(boundViews.size());
+          std::vector<VkWriteDescriptorSet> writes(boundViews.size());
+          for (std::size_t index = 0; index < boundViews.size(); ++index) {
+            infos[index] = {extra->defaultSampler, boundViews[index], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            writes[index] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descSet, 1, static_cast<std::uint32_t>(index), 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &infos[index], nullptr, nullptr};
+          }
+          vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+          vkCmdBindDescriptorSets(activeCommandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, extra->descriptorPipelineLayout, 0, 1, &descSet, 0, nullptr);
         }
-        if (descriptor[0] != 0U) { std::string textureError; (void)commandExtra->textures.getOrUpload(descriptor, activeCommandBuffer_, textureError); }
       }
     }
-    if (!bindGraphicsPipeline(error)) return false;
     vkCmdDraw(activeCommandBuffer_, packet.payload[0], packet.payload.size() > 1 ? packet.payload[1] : 1, 0, 0);
     contextTracker_.clearDirty();
     return true;
@@ -626,21 +694,14 @@ bool CommandProcessor::dispatch(const Pm4PacketView& packet, std::string& error,
 }
 
 bool CommandProcessor::recreateSwapchain(std::string& error) {
-  if (!hasSurface_) return true;
-  vkDeviceWaitIdle(device_);
-  destroySwapchainResources();
-  return createSwapchain(width_, height_, error) && createRenderPass(error) && createFramebuffers(error);
+  (void)error;
+  return true;
 }
 
 void CommandProcessor::destroySwapchainResources() noexcept {
-  if (device_ == VK_NULL_HANDLE) return;
-  for (auto framebuffer : framebuffers_) vkDestroyFramebuffer(device_, framebuffer, nullptr);
   framebuffers_.clear();
-  if (renderPass_ != VK_NULL_HANDLE) vkDestroyRenderPass(device_, renderPass_, nullptr);
   renderPass_ = VK_NULL_HANDLE;
-  for (auto view : swapchainImageViews_) vkDestroyImageView(device_, view, nullptr);
   swapchainImageViews_.clear();
-  if (swapchain_ != VK_NULL_HANDLE) vkDestroySwapchainKHR(device_, swapchain_, nullptr);
   swapchain_ = VK_NULL_HANDLE;
   swapchainImages_.clear();
 }
@@ -661,6 +722,22 @@ void CommandProcessor::shutdown() noexcept {
     if (commandExtra) {
       commandExtra->textures.destroy();
       commandExtra->presenter.destroy();
+      if (commandExtra->defaultSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device_, commandExtra->defaultSampler, nullptr);
+        commandExtra->defaultSampler = VK_NULL_HANDLE;
+      }
+      if (commandExtra->descriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device_, commandExtra->descriptorPool, nullptr);
+        commandExtra->descriptorPool = VK_NULL_HANDLE;
+      }
+      if (commandExtra->descSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_, commandExtra->descSetLayout, nullptr);
+        commandExtra->descSetLayout = VK_NULL_HANDLE;
+      }
+      if (commandExtra->descriptorPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device_, commandExtra->descriptorPipelineLayout, nullptr);
+        commandExtra->descriptorPipelineLayout = VK_NULL_HANDLE;
+      }
       if (hasSurface_) renderPass_ = VK_NULL_HANDLE;
     }
   }
